@@ -102,7 +102,13 @@ namespace CanvasInvalidationTracker
             s_VertsDirtyField    = graphicType.GetField("m_VertsDirty",    instPriv);
             s_MaterialDirtyField = graphicType.GetField("m_MaterialDirty", instPriv);
 
-            // Defer all runtime-touching work until the Editor is fully ready.
+            // Subscribe Capture here, at domain-reload time, so it is always
+            // registered before CanvasUpdateRegistry can re-subscribe its
+            // PerformUpdate (which drains the queues).  Patching still needs
+            // to be deferred because it touches JIT/native method bodies.
+            Canvas.willRenderCanvases += Capture;
+            EditorApplication.playModeStateChanged += _ => s_SeenThisCapture.Clear();
+
             EditorApplication.delayCall += LateInitialize;
         }
 
@@ -139,12 +145,9 @@ namespace CanvasInvalidationTracker
                     regType.GetMethod("TryRegisterCanvasElementForGraphicRebuild", staticPub),
                     selfType.GetMethod(nameof(Hook_TryRegisterGraphic),            selfFlags));
 
-            // Subscribe our Capture BEFORE forcing CanvasUpdateRegistry to
-            // create its singleton (which subscribes PerformUpdate after us).
-            Canvas.willRenderCanvases += Capture;
+            // Ensure CanvasUpdateRegistry singleton exists so its PerformUpdate
+            // is subscribed (it fires after our Capture since we subscribed first).
             var _ = CanvasUpdateRegistry.instance;
-
-            EditorApplication.playModeStateChanged += __ => s_SeenThisCapture.Clear();
         }
 
         // ── Hook methods (replacements for the patched originals) ────────────
