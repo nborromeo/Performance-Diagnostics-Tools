@@ -1,0 +1,8 @@
+{
+  "name": "com.unity.ui.batchhighlighter",
+  "version": "0.1.0",
+  "displayName": "UI Batch Highlighter",
+  "description": "Editor tool that highlights the first and last GameObjects in each uGUI canvas batch, using the UI Profiler data to identify real batch boundaries.",
+  "unity": "6000.3",
+  "type": "tool"
+}
