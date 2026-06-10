@@ -102,13 +102,7 @@ namespace CanvasInvalidationTracker
             s_VertsDirtyField    = graphicType.GetField("m_VertsDirty",    instPriv);
             s_MaterialDirtyField = graphicType.GetField("m_MaterialDirty", instPriv);
 
-            // Subscribe Capture here, at domain-reload time, so it is always
-            // registered before CanvasUpdateRegistry can re-subscribe its
-            // PerformUpdate (which drains the queues).  Patching still needs
-            // to be deferred because it touches JIT/native method bodies.
-            Canvas.willRenderCanvases += Capture;
             EditorApplication.playModeStateChanged += _ => s_SeenThisCapture.Clear();
-
             EditorApplication.delayCall += LateInitialize;
         }
 
@@ -145,9 +139,33 @@ namespace CanvasInvalidationTracker
                     regType.GetMethod("TryRegisterCanvasElementForGraphicRebuild", staticPub),
                     selfType.GetMethod(nameof(Hook_TryRegisterGraphic),            selfFlags));
 
-            // Ensure CanvasUpdateRegistry singleton exists so its PerformUpdate
-            // is subscribed (it fires after our Capture since we subscribed first).
-            var _ = CanvasUpdateRegistry.instance;
+            // If the registry singleton already exists (persisted from a prior
+            // domain in the scene), its PerformUpdate is already subscribed and
+            // will drain the queues before our Capture.  Fix the order by:
+            //   1. getting the PerformUpdate delegate via reflection,
+            //   2. removing it from the event,
+            //   3. subscribing our Capture,
+            //   4. re-adding PerformUpdate so it fires after us.
+            const BindingFlags instPriv2 = BindingFlags.Instance | BindingFlags.NonPublic;
+            var performUpdate = typeof(CanvasUpdateRegistry)
+                                    .GetMethod("PerformUpdate", instPriv2);
+            var existing = s_RegistryInstance.GetValue(null) as CanvasUpdateRegistry;
+            if (existing != null && performUpdate != null)
+            {
+                var del = (Canvas.WillRenderCanvases)
+                    System.Delegate.CreateDelegate(
+                        typeof(Canvas.WillRenderCanvases), existing, performUpdate);
+                Canvas.willRenderCanvases -= del;
+                Canvas.willRenderCanvases += Capture;
+                Canvas.willRenderCanvases += del;
+            }
+            else
+            {
+                // Registry not yet alive — subscribe Capture first, then force
+                // creation so PerformUpdate is added after us.
+                Canvas.willRenderCanvases += Capture;
+                var _ = CanvasUpdateRegistry.instance;
+            }
         }
 
         // ── Hook methods (replacements for the patched originals) ────────────

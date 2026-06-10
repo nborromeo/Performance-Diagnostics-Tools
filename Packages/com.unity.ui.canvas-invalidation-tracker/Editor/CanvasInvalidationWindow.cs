@@ -35,7 +35,6 @@ namespace CanvasInvalidationTracker
         Vector2   m_TraceScroll;
         int       m_SelectedId = -1;
         InvalidationEntry m_Selected;
-        GUIStyle  m_TraceStyle;   // lazy-init monospace style
 
         bool m_ShowLayout  = true;
         bool m_ShowGraphic = true;
@@ -377,19 +376,23 @@ namespace CanvasInvalidationTracker
             }
             else
             {
-                // Monospace scrollable text block
-                if (m_TraceStyle == null)
+                // Monospace scrollable text block.
+                // Rebuilt each frame so the text color always tracks the current
+                // Editor skin (dark / light mode switches invalidate cached styles).
+                var labelColor = EditorStyles.label.normal.textColor;
+                var m_TraceStyle = new GUIStyle(EditorStyles.label)
                 {
-                    m_TraceStyle = new GUIStyle(EditorStyles.label)
-                    {
-                        font      = Font.CreateDynamicFontFromOSFont("Courier New", 11),
-                        fontSize  = 11,
-                        wordWrap  = false,
-                        richText  = false,
-                        clipping  = TextClipping.Clip,
-                        padding   = new RectOffset(4, 4, 2, 2)
-                    };
-                }
+                    font     = Font.CreateDynamicFontFromOSFont("Courier New", 11),
+                    fontSize = 11,
+                    wordWrap = false,
+                    richText = false,
+                    clipping = TextClipping.Clip,
+                    padding  = new RectOffset(4, 4, 2, 2)
+                };
+                m_TraceStyle.normal.textColor   = labelColor;
+                m_TraceStyle.focused.textColor  = labelColor;
+                m_TraceStyle.hover.textColor    = labelColor;
+                m_TraceStyle.active.textColor   = labelColor;
 
                 float lineH    = m_TraceStyle.lineHeight + 2f;
                 int   lines    = e.StackTrace.Split('\n').Length;
