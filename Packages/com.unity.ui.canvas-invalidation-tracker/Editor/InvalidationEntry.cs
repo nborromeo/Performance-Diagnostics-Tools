@@ -39,5 +39,17 @@ namespace CanvasInvalidationTracker
         // Call-site stack trace captured at the moment of queue registration.
         // Null when the method detour could not be installed on this platform.
         public string StackTrace;
+
+        // Structured per-frame data for clickable stack trace links.
+        // Parallel to the lines in StackTrace; FilePath may be null for frames
+        // without debug info (e.g. Unity internals compiled without symbols).
+        public StackFrameInfo[] StackFrames;
+    }
+
+    public struct StackFrameInfo
+    {
+        public string DisplayLine; // e.g. "  at Foo.Bar()  [Foo.cs:42]"
+        public string FilePath;    // full absolute path; null if unavailable
+        public int    Line;
     }
 }

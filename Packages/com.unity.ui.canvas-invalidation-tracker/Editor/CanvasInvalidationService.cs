@@ -48,9 +48,9 @@ namespace CanvasInvalidationTracker
 
         // ── Pending traces (populated by hooks, consumed by Capture) ─────────
         // Key: ICanvasElement that was just registered
-        // Value: (type, formatted stack trace string)
-        static readonly Dictionary<ICanvasElement, (InvalidationType type, string trace)>
-            s_PendingTraces = new Dictionary<ICanvasElement, (InvalidationType, string)>();
+        // Value: (type, formatted stack trace string, structured frames for click-to-open)
+        static readonly Dictionary<ICanvasElement, (InvalidationType type, string trace, StackFrameInfo[] frames)>
+            s_PendingTraces = new Dictionary<ICanvasElement, (InvalidationType, string, StackFrameInfo[])>();
 
         // ── Entry store ──────────────────────────────────────────────────────
         static readonly List<InvalidationEntry> s_Entries = new List<InvalidationEntry>();
@@ -219,12 +219,14 @@ namespace CanvasInvalidationTracker
             if (s_PendingTraces.ContainsKey(element)) return;
 
             var st = new StackTrace(skipFrames: 2, fNeedFileInfo: true);
-            s_PendingTraces[element] = (type, FormatTrace(st));
+            var (trace, frames) = FormatTrace(st);
+            s_PendingTraces[element] = (type, trace, frames);
         }
 
-        static string FormatTrace(StackTrace st)
+        static (string trace, StackFrameInfo[] frames) FormatTrace(StackTrace st)
         {
-            var sb = new System.Text.StringBuilder();
+            var sb     = new System.Text.StringBuilder();
+            var frames = new List<StackFrameInfo>();
             for (int i = 0; i < st.FrameCount; i++)
             {
                 var frame  = st.GetFrame(i);
@@ -236,12 +238,21 @@ namespace CanvasInvalidationTracker
                 string file       = frame.GetFileName();
                 int    line       = frame.GetFileLineNumber();
 
-                sb.Append("  at ").Append(typeName).Append('.').Append(methodName).Append("()");
+                var sb2 = new System.Text.StringBuilder();
+                sb2.Append("  at ").Append(typeName).Append('.').Append(methodName).Append("()");
                 if (!string.IsNullOrEmpty(file))
-                    sb.Append($"  [{System.IO.Path.GetFileName(file)}:{line}]");
-                sb.AppendLine();
+                    sb2.Append($"  [{System.IO.Path.GetFileName(file)}:{line}]");
+
+                string displayLine = sb2.ToString();
+                sb.AppendLine(displayLine);
+                frames.Add(new StackFrameInfo
+                {
+                    DisplayLine = displayLine,
+                    FilePath    = file,
+                    Line        = line,
+                });
             }
-            return sb.ToString();
+            return (sb.ToString(), frames.ToArray());
         }
 
         // ── Queue capture (fires before PerformUpdate clears the queues) ─────
@@ -299,9 +310,13 @@ namespace CanvasInvalidationTracker
                                 | (type == InvalidationType.Layout ? 0L : 1L);
                 if (!s_SeenThisCapture.Add(captureKey)) continue;
 
-                string trace = null;
+                string          trace  = null;
+                StackFrameInfo[] frames = null;
                 if (s_PendingTraces.TryGetValue(element, out var pending))
-                    trace = pending.trace;
+                {
+                    trace  = pending.trace;
+                    frames = pending.frames;
+                }
 
                 // Resolve canvas here so we can form the dedup key before allocating an entry
                 var    canvas     = go.GetComponentInParent<Canvas>(true);
@@ -314,7 +329,7 @@ namespace CanvasInvalidationTracker
                 }
                 else
                 {
-                    var entry = MakeEntry(go, type, element, trace, canvas, canvasName);
+                    var entry = MakeEntry(go, type, element, trace, frames, canvas, canvasName);
                     s_Entries.Add(entry);
                     s_DedupMap[dedupKey] = entry;
                 }
@@ -340,6 +355,7 @@ namespace CanvasInvalidationTracker
 
         static InvalidationEntry MakeEntry(GameObject go, InvalidationType type,
                                            ICanvasElement element, string trace,
+                                           StackFrameInfo[] frames,
                                            Canvas canvas, string canvasName)
         {
             var comps = go.GetComponents<Component>();
@@ -368,7 +384,8 @@ namespace CanvasInvalidationTracker
                 CanvasRenderMode   = canvas != null ? canvas.renderMode.ToString() : string.Empty,
                 Type               = type,
                 DirtyFlags         = flags,
-                StackTrace         = trace
+                StackTrace         = trace,
+                StackFrames        = frames
             };
         }
 

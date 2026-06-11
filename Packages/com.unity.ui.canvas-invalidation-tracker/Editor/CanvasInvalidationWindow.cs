@@ -586,8 +586,10 @@ namespace CanvasInvalidationTracker
             }
             else
             {
+                var frames = e.StackFrames;
                 var labelColor = EditorStyles.label.normal.textColor;
-                var traceStyle = new GUIStyle(EditorStyles.label)
+
+                var frameStyle = new GUIStyle(EditorStyles.label)
                 {
                     font     = Font.CreateDynamicFontFromOSFont("Courier New", 11),
                     fontSize = 11,
@@ -596,18 +598,42 @@ namespace CanvasInvalidationTracker
                     clipping = TextClipping.Clip,
                     padding  = new RectOffset(4, 4, 2, 2)
                 };
-                traceStyle.normal.textColor  = labelColor;
-                traceStyle.focused.textColor = labelColor;
-                traceStyle.hover.textColor   = labelColor;
-                traceStyle.active.textColor  = labelColor;
+                frameStyle.normal.textColor = labelColor;
 
-                float lineH = traceStyle.lineHeight + 2f;
-                int   lines = e.StackTrace.Split('\n').Length;
-                float textH = Mathf.Max(60f, lines * lineH);
+                var linkStyle = new GUIStyle(frameStyle);
+                linkStyle.normal.textColor  = new Color(0.35f, 0.65f, 1f);
+                linkStyle.hover.textColor   = new Color(0.55f, 0.80f, 1f);
+                linkStyle.active.textColor  = Color.white;
+
+                float lineH = frameStyle.lineHeight + 2f;
+                int   count = frames != null ? frames.Length : e.StackTrace.Split('\n').Length;
+                float textH = Mathf.Max(60f, count * lineH);
 
                 m_TraceScroll = GUILayout.BeginScrollView(
                     m_TraceScroll, GUILayout.Height(Mathf.Min(textH, 280f)));
-                GUILayout.Label(e.StackTrace, traceStyle);
+
+                if (frames != null)
+                {
+                    foreach (var f in frames)
+                    {
+                        bool hasFile = !string.IsNullOrEmpty(f.FilePath) && f.Line > 0;
+                        if (hasFile)
+                        {
+                            if (GUILayout.Button(f.DisplayLine, linkStyle))
+                                UnityEditorInternal.InternalEditorUtility.OpenFileAtLineExternal(
+                                    f.FilePath, f.Line, 0);
+                        }
+                        else
+                        {
+                            GUILayout.Label(f.DisplayLine, frameStyle);
+                        }
+                    }
+                }
+                else
+                {
+                    GUILayout.Label(e.StackTrace, frameStyle);
+                }
+
                 GUILayout.EndScrollView();
 
                 if (GUILayout.Button("Copy to Clipboard", EditorStyles.miniButton,
