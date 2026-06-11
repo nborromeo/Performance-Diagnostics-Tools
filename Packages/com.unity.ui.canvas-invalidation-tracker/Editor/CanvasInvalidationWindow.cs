@@ -1,37 +1,34 @@
 using System.Collections.Generic;
+using System.Linq;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.UIElements;
 
 namespace CanvasInvalidationTracker
 {
     public sealed class CanvasInvalidationWindow : EditorWindow
     {
         // ── Layout ───────────────────────────────────────────────────────────
-        const float k_ListWidth      = 430f;
-        const float k_SplitterWidth  = 3f;
-        const float k_RowHeight      = 22f;
-        const float k_BadgeWidth     = 70f;
-        const float k_FlagsWidth     = 24f;
-        const float k_FrameWidth     = 54f;
-        const float k_CanvasWidth    = 120f;
-        const float k_CountWidth     = 36f;
-        const float k_HeaderHeight   = k_RowHeight;
+        const float k_RowHeight      = 19f;
         const float k_ToolbarHeight  = 21f;
+        const float k_ListInitWidth  = 430f;
+
+        // Column name constants (matched in sort switch)
+        const string k_ColType   = "type";
+        const string k_ColFrame  = "frame";
+        const string k_ColObject = "object";
+        const string k_ColCanvas = "canvas";
+        const string k_ColCount  = "count";
 
         // ── Colors ───────────────────────────────────────────────────────────
         static readonly Color k_Layout      = new Color(0.35f, 0.65f, 1.00f, 1f);
         static readonly Color k_Graphic     = new Color(0.30f, 0.90f, 0.50f, 1f);
-        static readonly Color k_Selected    = new Color(0.24f, 0.48f, 0.90f, 1f);
-        static readonly Color k_RowOdd      = new Color(0f,    0f,    0f,    0.05f);
         static readonly Color k_PlayBg      = new Color(1f,    0.85f, 0.30f, 0.08f);
         static readonly Color k_EditBg      = new Color(0.30f, 0.50f, 1.00f, 0.05f);
-        static readonly Color k_Strip       = new Color(0f,    0f,    0f,    0.25f);
-        static readonly Color k_HeaderBg    = new Color(0f,    0f,    0f,    0.20f);
-        static readonly Color k_Separator   = new Color(1f,    1f,    1f,    0.08f);
         static readonly Color k_DividerLine = new Color(1f,    1f,    1f,    0.10f);
+        static readonly Color k_CountHigh   = new Color(1f,    0.85f, 0.25f, 1f);
 
         // ── State ────────────────────────────────────────────────────────────
-        Vector2   m_ListScroll;
         Vector2   m_DetailsScroll;
         Vector2   m_TraceScroll;
         int       m_SelectedId = -1;
@@ -40,8 +37,10 @@ namespace CanvasInvalidationTracker
         bool m_ShowLayout  = true;
         bool m_ShowGraphic = true;
 
-        readonly List<InvalidationEntry> m_Filtered   = new List<InvalidationEntry>();
+        readonly List<InvalidationEntry> m_Filtered    = new List<InvalidationEntry>();
         bool                             m_FilterDirty = true;
+
+        MultiColumnListView m_ListView;
 
         // ── Menu entry ───────────────────────────────────────────────────────
         [MenuItem("Window/Analysis/Canvas Invalidation Tracker")]
@@ -62,39 +61,356 @@ namespace CanvasInvalidationTracker
         void OnChanged()
         {
             m_FilterDirty = true;
+            RebuildFilterIfDirty();
+            ApplyCurrentSort();
+            m_ListView?.RefreshItems();
+            ReapplySelection();
             Repaint();
         }
 
-        // ── Root GUI ─────────────────────────────────────────────────────────
-        void OnGUI()
+        // ── UI Toolkit entry point ────────────────────────────────────────────
+        void CreateGUI()
         {
-            DrawToolbar();
+            rootVisualElement.style.flexDirection = FlexDirection.Column;
 
-            if (!CanvasInvalidationService.IsReflectionReady)
-            {
-                EditorGUILayout.HelpBox(
-                    "Reflection init failed — CanvasUpdateRegistry internal fields not found.\n" +
-                    "Ensure com.unity.ugui is installed.",
-                    MessageType.Error);
-                return;
-            }
+            // Toolbar lives in an IMGUIContainer so we can reuse the existing IMGUI code
+            var toolbarContainer = new IMGUIContainer(DrawToolbar);
+            toolbarContainer.style.height    = k_ToolbarHeight;
+            toolbarContainer.style.flexShrink = 0;
+            rootVisualElement.Add(toolbarContainer);
+
+            // Horizontal split: list on the left, details on the right
+            var split = new TwoPaneSplitView(0, k_ListInitWidth, TwoPaneSplitViewOrientation.Horizontal);
+            split.style.flexGrow = 1;
+
+            // Left pane — MultiColumnListView
+            BuildListView();
+            m_ListView.style.minWidth = 150;
+            split.Add(m_ListView);
+
+            // Right pane — details stay as IMGUI for now
+            var detailsPane        = new VisualElement();
+            detailsPane.style.flexGrow = 1;
+            detailsPane.style.minWidth = 200;
+            var detailsContainer   = new IMGUIContainer(DrawDetails);
+            detailsContainer.style.flexGrow = 1;
+            detailsPane.Add(detailsContainer);
+            split.Add(detailsPane);
+
+            rootVisualElement.Add(split);
 
             RebuildFilterIfDirty();
-
-            float y    = k_ToolbarHeight;
-            float h    = position.height - y;
-            float detW = position.width - k_ListWidth - k_SplitterWidth;
-
-            var listRect    = new Rect(0,                              y, k_ListWidth,     h);
-            var splitRect   = new Rect(k_ListWidth,                    y, k_SplitterWidth, h);
-            var detailsRect = new Rect(k_ListWidth + k_SplitterWidth,  y, Mathf.Max(1, detW), h);
-
-            DrawList(listRect);
-            EditorGUI.DrawRect(splitRect, k_Strip);
-            DrawDetails(detailsRect);
         }
 
-        // ── Toolbar ──────────────────────────────────────────────────────────
+        // ── MultiColumnListView construction ─────────────────────────────────
+        void BuildListView()
+        {
+            var columns = new Columns
+            {
+                new Column
+                {
+                    name     = k_ColType,
+                    title    = "Type",
+                    width    = 110,
+                    minWidth = 80,
+                    resizable = true,
+                    sortable  = true,
+                    makeCell  = MakeTypeCell,
+                    bindCell  = BindTypeCell,
+                },
+                new Column
+                {
+                    name     = k_ColFrame,
+                    title    = "Frame",
+                    width    = 62,
+                    minWidth = 40,
+                    resizable = true,
+                    sortable  = true,
+                    makeCell = () =>
+                    {
+                        var lbl = new Label();
+                        lbl.style.unityTextAlign = TextAnchor.MiddleLeft;
+                        lbl.style.flexGrow        = 1;
+                        lbl.style.fontSize       = 10;
+                        lbl.style.paddingLeft    = 2;
+                        return lbl;
+                    },
+                    bindCell = (el, i) =>
+                        ((Label)el).text = i < m_Filtered.Count ? $"#{m_Filtered[i].FrameNumber}" : "",
+                },
+                new Column
+                {
+                    name     = k_ColObject,
+                    title    = "Object",
+                    width    = 130,
+                    minWidth = 60,
+                    resizable = true,
+                    sortable  = true,
+                    makeCell = () =>
+                    {
+                        var lbl = new Label();
+                        lbl.style.unityTextAlign = TextAnchor.MiddleLeft;
+                        lbl.style.flexGrow        = 1;
+                        lbl.style.fontSize       = 10;
+                        lbl.style.paddingLeft    = 2;
+                        lbl.style.overflow       = Overflow.Hidden;
+                        return lbl;
+                    },
+                    bindCell = (el, i) =>
+                        ((Label)el).text = i < m_Filtered.Count ? m_Filtered[i].ObjectName : "",
+                },
+                new Column
+                {
+                    name     = k_ColCanvas,
+                    title    = "Canvas",
+                    width    = 130,
+                    minWidth = 60,
+                    resizable = true,
+                    sortable  = true,
+                    makeCell = () =>
+                    {
+                        var lbl = new Label();
+                        lbl.style.unityTextAlign = TextAnchor.MiddleLeft;
+                        lbl.style.flexGrow        = 1;
+                        lbl.style.fontSize       = 10;
+                        lbl.style.paddingLeft    = 2;
+                        lbl.style.overflow       = Overflow.Hidden;
+                        return lbl;
+                    },
+                    bindCell = (el, i) =>
+                        ((Label)el).text = i < m_Filtered.Count ? m_Filtered[i].CanvasName : "",
+                },
+                new Column
+                {
+                    name     = k_ColCount,
+                    title    = "Count",
+                    width    = 52,
+                    minWidth = 30,
+                    resizable = true,
+                    sortable  = true,
+                    makeCell  = MakeCountCell,
+                    bindCell  = BindCountCell,
+                },
+                // Unity forces the last column to be non-resizable; this invisible spacer
+                // absorbs that restriction so every visible column can be freely resized.
+                new Column
+                {
+                    name     = "__spacer",
+                    title    = "",
+                    width    = 0,
+                    minWidth = 0,
+                    resizable = false,
+                    sortable  = false,
+                    makeCell  = () => new VisualElement(),
+                    bindCell  = (_, _) => { },
+                },
+            };
+
+            m_ListView = new MultiColumnListView(columns)
+            {
+                itemsSource                  = m_Filtered,
+                fixedItemHeight              = k_RowHeight,
+                sortingMode                  = ColumnSortingMode.Default,
+                selectionType                = SelectionType.Single,
+                showAlternatingRowBackgrounds = AlternatingRowBackground.None,
+                reorderable                  = false,
+            };
+            m_ListView.style.flexGrow = 1;
+
+            m_ListView.columnSortingChanged += OnColumnSortingChanged;
+            m_ListView.selectionChanged     += OnListSelectionChanged;
+        }
+
+        // ── Cell / header factories ──────────────────────────────────────────
+
+        VisualElement MakeTypeCell()
+        {
+            var root = new VisualElement();
+            root.style.flexDirection = FlexDirection.Row;
+            root.style.alignItems    = Align.Center;
+            root.style.flexGrow      = 1;
+            root.style.overflow      = Overflow.Hidden;
+
+            // Coloured left-edge strip (mirrors the original 4 px IMGUI strip)
+            var strip = new VisualElement { name = "strip" };
+            strip.style.width      = 4;
+            strip.style.alignSelf  = Align.Stretch;
+            strip.style.flexShrink = 0;
+            strip.style.marginRight = 4;
+
+            var badge = new Label { name = "badge" };
+            badge.style.unityFontStyleAndWeight = FontStyle.Bold;
+            badge.style.fontSize   = 10;
+            badge.style.flexShrink = 0;
+            badge.style.minWidth   = 52;
+
+            var flags = new Label { name = "flags" };
+            flags.style.fontSize   = 9;
+            flags.style.marginLeft = 2;
+            flags.style.flexShrink = 0;
+
+            root.Add(strip);
+            root.Add(badge);
+            root.Add(flags);
+            return root;
+        }
+
+        void BindTypeCell(VisualElement el, int index)
+        {
+            if (index >= m_Filtered.Count) return;
+            var e = m_Filtered[index];
+
+            var strip = el.Q<VisualElement>("strip");
+            var badge = el.Q<Label>("badge");
+            var flags = el.Q<Label>("flags");
+
+            bool  isLayout = e.Type == InvalidationType.Layout;
+            Color typeCol  = isLayout ? k_Layout : k_Graphic;
+
+            strip.style.backgroundColor = typeCol;
+            badge.text                  = isLayout ? "LAYOUT" : "GRAPHIC";
+            badge.style.color           = typeCol;
+
+            if (e.Type == InvalidationType.Graphic && e.DirtyFlags != GraphicDirtyFlags.None)
+            {
+                string f = "";
+                if ((e.DirtyFlags & GraphicDirtyFlags.Vertices) != 0) f += "V";
+                if ((e.DirtyFlags & GraphicDirtyFlags.Material)  != 0) f += "M";
+                flags.text                  = f;
+                flags.style.display         = DisplayStyle.Flex;
+            }
+            else
+            {
+                flags.style.display = DisplayStyle.None;
+            }
+
+            // Tint the whole row for play- vs edit-mode context.
+            // Walk up from the cell to the list-item row element.
+            var row = el.parent;
+            while (row != null && !row.ClassListContains("unity-list-view__item"))
+                row = row.parent;
+            if (row != null)
+                row.style.backgroundColor = e.IsInPlayMode ? k_PlayBg : k_EditBg;
+        }
+
+        static VisualElement MakeCountCell()
+        {
+            var lbl = new Label();
+            lbl.style.unityTextAlign = TextAnchor.MiddleCenter;
+            lbl.style.alignSelf      = Align.Stretch;
+            lbl.style.fontSize       = 10;
+            return lbl;
+        }
+
+        void BindCountCell(VisualElement el, int index)
+        {
+            if (index >= m_Filtered.Count) return;
+            var e   = m_Filtered[index];
+            var lbl = (Label)el;
+            lbl.text = e.Count.ToString();
+            if (e.Count > 1)
+            {
+                lbl.style.color                   = k_CountHigh;
+                lbl.style.unityFontStyleAndWeight  = FontStyle.Bold;
+            }
+            else
+            {
+                lbl.style.color                   = new StyleColor(StyleKeyword.Null);
+                lbl.style.unityFontStyleAndWeight  = FontStyle.Normal;
+            }
+        }
+
+        // ── Sorting ──────────────────────────────────────────────────────────
+
+        void OnColumnSortingChanged()
+        {
+            ApplyCurrentSort();
+            m_ListView.RefreshItems();
+            ReapplySelection();
+        }
+
+        void ApplyCurrentSort()
+        {
+            if (m_ListView == null) return;
+            var descs = m_ListView.sortedColumns?.ToList();
+            if (descs == null || descs.Count == 0) return;
+
+            var  primary = descs[0];
+            bool asc     = primary.direction == SortDirection.Ascending;
+
+            switch (primary.column.name)
+            {
+                case k_ColType:
+                    m_Filtered.Sort((a, b) => asc
+                        ? a.Type.CompareTo(b.Type)
+                        : b.Type.CompareTo(a.Type));
+                    break;
+                case k_ColFrame:
+                    m_Filtered.Sort((a, b) => asc
+                        ? a.FrameNumber.CompareTo(b.FrameNumber)
+                        : b.FrameNumber.CompareTo(a.FrameNumber));
+                    break;
+                case k_ColObject:
+                    m_Filtered.Sort((a, b) => asc
+                        ? string.Compare(a.ObjectName, b.ObjectName, System.StringComparison.Ordinal)
+                        : string.Compare(b.ObjectName, a.ObjectName, System.StringComparison.Ordinal));
+                    break;
+                case k_ColCanvas:
+                    m_Filtered.Sort((a, b) => asc
+                        ? string.Compare(a.CanvasName, b.CanvasName, System.StringComparison.Ordinal)
+                        : string.Compare(b.CanvasName, a.CanvasName, System.StringComparison.Ordinal));
+                    break;
+                case k_ColCount:
+                    m_Filtered.Sort((a, b) => asc
+                        ? a.Count.CompareTo(b.Count)
+                        : b.Count.CompareTo(a.Count));
+                    break;
+            }
+        }
+
+        // Re-select the previously selected entry after a list rebuild or sort
+        void ReapplySelection()
+        {
+            if (m_ListView == null || m_Selected == null) return;
+            int idx = m_Filtered.IndexOf(m_Selected);
+            if (idx >= 0)
+                m_ListView.SetSelectionWithoutNotify(new[] { idx });
+            else
+            {
+                m_Selected   = null;
+                m_SelectedId = -1;
+                m_ListView.ClearSelection();
+            }
+        }
+
+        void OnListSelectionChanged(IEnumerable<object> selectedItems)
+        {
+            var entry = selectedItems.FirstOrDefault() as InvalidationEntry;
+            if (entry != null)
+                SelectEntry(entry);
+            else
+            {
+                m_Selected   = null;
+                m_SelectedId = -1;
+            }
+            Repaint();
+        }
+
+        // ── Filter ───────────────────────────────────────────────────────────
+        void RebuildFilterIfDirty()
+        {
+            if (!m_FilterDirty) return;
+            m_FilterDirty = false;
+            m_Filtered.Clear();
+            foreach (var e in CanvasInvalidationService.Entries)
+            {
+                if (!m_ShowLayout  && e.Type == InvalidationType.Layout)  continue;
+                if (!m_ShowGraphic && e.Type == InvalidationType.Graphic) continue;
+                m_Filtered.Add(e);
+            }
+        }
+
+        // ── Toolbar (IMGUI) ──────────────────────────────────────────────────
         void DrawToolbar()
         {
             EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
@@ -112,7 +428,14 @@ namespace CanvasInvalidationTracker
             EditorGUI.BeginChangeCheck();
             m_ShowLayout  = GUILayout.Toggle(m_ShowLayout,  "Layout",  EditorStyles.toolbarButton, GUILayout.Width(52));
             m_ShowGraphic = GUILayout.Toggle(m_ShowGraphic, "Graphic", EditorStyles.toolbarButton, GUILayout.Width(58));
-            if (EditorGUI.EndChangeCheck()) m_FilterDirty = true;
+            if (EditorGUI.EndChangeCheck())
+            {
+                m_FilterDirty = true;
+                RebuildFilterIfDirty();
+                ApplyCurrentSort();
+                m_ListView?.RefreshItems();
+                ReapplySelection();
+            }
 
             GUILayout.FlexibleSpace();
 
@@ -124,9 +447,8 @@ namespace CanvasInvalidationTracker
 
             GUILayout.Label($"{m_Filtered.Count} entries", EditorStyles.miniLabel, GUILayout.Width(72));
 
-            // Patching status
-            bool patching = CanvasInvalidationService.IsPatchingActive;
-            var prevColor = GUI.color;
+            bool patching  = CanvasInvalidationService.IsPatchingActive;
+            var  prevColor = GUI.color;
             GUI.color = patching ? new Color(0.3f, 1f, 0.4f) : new Color(1f, 0.5f, 0.2f);
             GUILayout.Label(patching ? "● Traces ON" : "● Traces OFF",
                             EditorStyles.miniLabel, GUILayout.Width(82));
@@ -138,161 +460,33 @@ namespace CanvasInvalidationTracker
         void DoClear()
         {
             CanvasInvalidationService.Clear();
-            m_Selected   = null;
-            m_SelectedId = -1;
+            m_Selected    = null;
+            m_SelectedId  = -1;
             m_FilterDirty = true;
+            RebuildFilterIfDirty();
+            m_ListView?.RefreshItems();
+            Repaint();
         }
 
-        // ── Filter ───────────────────────────────────────────────────────────
-        void RebuildFilterIfDirty()
+        // ── Details panel (IMGUI) ────────────────────────────────────────────
+        // Runs inside an IMGUIContainer — no BeginArea/EndArea needed.
+        void DrawDetails()
         {
-            if (!m_FilterDirty) return;
-            m_FilterDirty = false;
-            m_Filtered.Clear();
-            foreach (var e in CanvasInvalidationService.Entries)
+            if (!CanvasInvalidationService.IsReflectionReady)
             {
-                if (!m_ShowLayout  && e.Type == InvalidationType.Layout)  continue;
-                if (!m_ShowGraphic && e.Type == InvalidationType.Graphic) continue;
-                m_Filtered.Add(e);
-            }
-        }
-
-        // ── List panel ───────────────────────────────────────────────────────
-        void DrawList(Rect rect)
-        {
-            // Header row
-            var headerRect = new Rect(rect.x, rect.y, rect.width, k_HeaderHeight);
-            DrawListHeader(headerRect);
-
-            // Body
-            var bodyRect = new Rect(rect.x, rect.y + k_HeaderHeight, rect.width,
-                                    rect.height - k_HeaderHeight);
-
-            if (m_Filtered.Count == 0)
-            {
-                GUI.Label(bodyRect, "  No invalidations captured yet.", EditorStyles.centeredGreyMiniLabel);
+                EditorGUILayout.HelpBox(
+                    "Reflection init failed — CanvasUpdateRegistry internal fields not found.\n" +
+                    "Ensure com.unity.ugui is installed.",
+                    MessageType.Error);
                 return;
             }
 
-            float contentH = m_Filtered.Count * k_RowHeight;
-            var viewRect   = new Rect(0, 0, bodyRect.width - 14f, contentH);
-
-            m_ListScroll = GUI.BeginScrollView(bodyRect, m_ListScroll, viewRect);
-
-            // Culling: only draw visible rows
-            int firstVisible = Mathf.Max(0, (int)(m_ListScroll.y / k_RowHeight));
-            int lastVisible  = Mathf.Min(m_Filtered.Count - 1,
-                                         (int)((m_ListScroll.y + bodyRect.height) / k_RowHeight) + 1);
-
-            for (int i = firstVisible; i <= lastVisible; i++)
-                DrawListRow(new Rect(0, i * k_RowHeight, viewRect.width, k_RowHeight), m_Filtered[i], i);
-
-            GUI.EndScrollView();
-        }
-
-        void DrawListHeader(Rect r)
-        {
-            EditorGUI.DrawRect(r, k_HeaderBg);
-            float x = r.x + 8f;
-            DrawHeaderLabel(x,                                              r, "Type",   k_BadgeWidth + k_FlagsWidth);
-            DrawHeaderLabel(x + k_BadgeWidth + k_FlagsWidth,                r, "Frame",  k_FrameWidth);
-            DrawHeaderLabel(x + k_BadgeWidth + k_FlagsWidth + k_FrameWidth, r, "Object",
-                            r.width - k_BadgeWidth - k_FlagsWidth - k_FrameWidth - k_CanvasWidth - k_CountWidth - 16f);
-            DrawHeaderLabel(r.xMax - k_CanvasWidth - k_CountWidth,          r, "Canvas", k_CanvasWidth);
-            DrawHeaderLabel(r.xMax - k_CountWidth,                          r, "Count",  k_CountWidth);
-        }
-
-        static void DrawHeaderLabel(float x, Rect row, string text, float w)
-            => GUI.Label(new Rect(x, row.y + 3f, w, 16f), text, EditorStyles.boldLabel);
-
-        void DrawListRow(Rect r, InvalidationEntry e, int index)
-        {
-            bool selected = e.Id == m_SelectedId;
-
-            // Background
-            if (selected)
-                EditorGUI.DrawRect(r, k_Selected);
-            else
-            {
-                Color bg = e.IsInPlayMode ? k_PlayBg : k_EditBg;
-                if (index % 2 == 1) { bg.a += 0.04f; }
-                EditorGUI.DrawRect(r, bg);
-                if (index % 2 == 1) EditorGUI.DrawRect(r, k_RowOdd);
-            }
-
-            // Left type-colour strip
-            EditorGUI.DrawRect(new Rect(r.x, r.y, 4f, r.height),
-                               e.Type == InvalidationType.Layout ? k_Layout : k_Graphic);
-
-            float x  = r.x + 8f;
-            float ty = r.y + 4f;
-
-            // Type badge
-            Color prev = GUI.color;
-            GUI.color = e.Type == InvalidationType.Layout ? k_Layout : k_Graphic;
-            GUI.Label(new Rect(x, ty, k_BadgeWidth, 14f),
-                      e.Type == InvalidationType.Layout ? "LAYOUT" : "GRAPHIC",
-                      EditorStyles.miniBoldLabel);
-            GUI.color = prev;
-
-            // Dirty flags (V / M) for graphic entries
-            if (e.Type == InvalidationType.Graphic && e.DirtyFlags != GraphicDirtyFlags.None)
-            {
-                string flags = "";
-                if ((e.DirtyFlags & GraphicDirtyFlags.Vertices) != 0) flags += "V";
-                if ((e.DirtyFlags & GraphicDirtyFlags.Material) != 0) flags += "M";
-                GUI.Label(new Rect(x + k_BadgeWidth, ty, k_FlagsWidth, 14f), flags,
-                          EditorStyles.miniLabel);
-            }
-
-            // Frame
-            GUI.Label(new Rect(x + k_BadgeWidth + k_FlagsWidth, ty, k_FrameWidth, 14f),
-                      $"#{e.FrameNumber}", EditorStyles.miniLabel);
-
-            // Object name (truncated)
-            float nameX = x + k_BadgeWidth + k_FlagsWidth + k_FrameWidth;
-            float nameW = r.width - k_BadgeWidth - k_FlagsWidth - k_FrameWidth - k_CanvasWidth - k_CountWidth - 16f;
-            GUI.Label(new Rect(nameX, ty, nameW, 14f), e.ObjectName, EditorStyles.miniLabel);
-
-            // Canvas
-            GUI.Label(new Rect(r.xMax - k_CanvasWidth - k_CountWidth + 4f, ty, k_CanvasWidth - 8f, 14f),
-                      e.CanvasName, EditorStyles.miniLabel);
-
-            // Count
-            if (e.Count > 1)
-            {
-                var countPrev = GUI.color;
-                GUI.color = new Color(1f, 0.85f, 0.25f, 1f);
-                GUI.Label(new Rect(r.xMax - k_CountWidth + 2f, ty, k_CountWidth - 4f, 14f),
-                          e.Count.ToString(), EditorStyles.miniBoldLabel);
-                GUI.color = countPrev;
-            }
-            else
-            {
-                GUI.Label(new Rect(r.xMax - k_CountWidth + 2f, ty, k_CountWidth - 4f, 14f),
-                          "1", EditorStyles.miniLabel);
-            }
-
-            // Click handler
-            if (Event.current.type == EventType.MouseDown && r.Contains(Event.current.mousePosition))
-            {
-                SelectEntry(e);
-                Event.current.Use();
-            }
-        }
-
-        // ── Details panel ────────────────────────────────────────────────────
-        void DrawDetails(Rect rect)
-        {
-            GUILayout.BeginArea(rect);
-
             if (m_Selected == null)
             {
-                var centreStyle = new GUIStyle(EditorStyles.centeredGreyMiniLabel) { wordWrap = true };
                 GUILayout.FlexibleSpace();
+                var centreStyle = new GUIStyle(EditorStyles.centeredGreyMiniLabel) { wordWrap = true };
                 GUILayout.Label("Select an entry in the list\nto inspect its details.", centreStyle);
                 GUILayout.FlexibleSpace();
-                GUILayout.EndArea();
                 return;
             }
 
@@ -318,8 +512,7 @@ namespace CanvasInvalidationTracker
             DrawField("Path", e.HierarchyPath);
             GUILayout.Space(4);
 
-            // Action buttons
-            var  go    = e.Target;   // Unity fake-null if the object was destroyed
+            var  go    = e.Target;
             bool alive = go != null;
             GUILayout.BeginHorizontal();
             GUILayout.Space(4);
@@ -327,7 +520,6 @@ namespace CanvasInvalidationTracker
             {
                 if (GUILayout.Button("Ping in Hierarchy", EditorStyles.miniButton, GUILayout.Width(130)))
                     EditorGUIUtility.PingObject(go);
-
                 if (GUILayout.Button("Select", EditorStyles.miniButton, GUILayout.Width(60)))
                 {
                     Selection.activeGameObject = go;
@@ -353,7 +545,7 @@ namespace CanvasInvalidationTracker
                     flagStr = "(flags cleared before capture)";
                 else
                 {
-                    var parts = new System.Collections.Generic.List<string>(2);
+                    var parts = new List<string>(2);
                     if ((e.DirtyFlags & GraphicDirtyFlags.Vertices) != 0) parts.Add("Vertices");
                     if ((e.DirtyFlags & GraphicDirtyFlags.Material) != 0) parts.Add("Material");
                     flagStr = string.Join(" + ", parts);
@@ -394,11 +586,8 @@ namespace CanvasInvalidationTracker
             }
             else
             {
-                // Monospace scrollable text block.
-                // Rebuilt each frame so the text color always tracks the current
-                // Editor skin (dark / light mode switches invalidate cached styles).
                 var labelColor = EditorStyles.label.normal.textColor;
-                var m_TraceStyle = new GUIStyle(EditorStyles.label)
+                var traceStyle = new GUIStyle(EditorStyles.label)
                 {
                     font     = Font.CreateDynamicFontFromOSFont("Courier New", 11),
                     fontSize = 11,
@@ -407,19 +596,18 @@ namespace CanvasInvalidationTracker
                     clipping = TextClipping.Clip,
                     padding  = new RectOffset(4, 4, 2, 2)
                 };
-                m_TraceStyle.normal.textColor   = labelColor;
-                m_TraceStyle.focused.textColor  = labelColor;
-                m_TraceStyle.hover.textColor    = labelColor;
-                m_TraceStyle.active.textColor   = labelColor;
+                traceStyle.normal.textColor  = labelColor;
+                traceStyle.focused.textColor = labelColor;
+                traceStyle.hover.textColor   = labelColor;
+                traceStyle.active.textColor  = labelColor;
 
-                float lineH    = m_TraceStyle.lineHeight + 2f;
-                int   lines    = e.StackTrace.Split('\n').Length;
-                float textH    = Mathf.Max(60f, lines * lineH);
+                float lineH = traceStyle.lineHeight + 2f;
+                int   lines = e.StackTrace.Split('\n').Length;
+                float textH = Mathf.Max(60f, lines * lineH);
 
                 m_TraceScroll = GUILayout.BeginScrollView(
-                    m_TraceScroll,
-                    GUILayout.Height(Mathf.Min(textH, 280f)));
-                GUILayout.Label(e.StackTrace, m_TraceStyle);
+                    m_TraceScroll, GUILayout.Height(Mathf.Min(textH, 280f)));
+                GUILayout.Label(e.StackTrace, traceStyle);
                 GUILayout.EndScrollView();
 
                 if (GUILayout.Button("Copy to Clipboard", EditorStyles.miniButton,
@@ -428,7 +616,6 @@ namespace CanvasInvalidationTracker
             }
 
             GUILayout.EndScrollView();
-            GUILayout.EndArea();
         }
 
         // ── Detail helpers ───────────────────────────────────────────────────
@@ -463,13 +650,6 @@ namespace CanvasInvalidationTracker
             m_SelectedId  = entry.Id;
             m_Selected    = entry;
             m_TraceScroll = Vector2.zero;
-
-            var go = entry.Target;   // Unity fake-null if destroyed
-            if (go != null)
-            {
-                Selection.activeGameObject = go;
-                EditorGUIUtility.PingObject(go);
-            }
 
             Repaint();
         }
