@@ -61,6 +61,10 @@ namespace CanvasInvalidationTracker
         // Per-capture dedup (RuntimeHelpers.GetHashCode is stable & doesn't call deprecated API)
         static readonly HashSet<long> s_SeenThisCapture = new HashSet<long>();
 
+        // Cross-frame dedup: maps ComputeDedupKey(type, canvasName, stackTrace) → canonical entry
+        static readonly Dictionary<long, InvalidationEntry> s_DedupMap =
+            new Dictionary<long, InvalidationEntry>();
+
         // ── Public API ───────────────────────────────────────────────────────
         public static IReadOnlyList<InvalidationEntry> Entries  => s_Entries;
         public static bool IsPaused    { get => s_Paused; set => s_Paused = value; }
@@ -281,7 +285,7 @@ namespace CanvasInvalidationTracker
             int count = (int)s_QueueCount.GetValue(queue);
             if (count == 0) return false;
 
-            bool added = false;
+            bool changed = false;
             for (int i = 0; i < count; i++)
             {
                 var element = s_QueueIndexer.GetValue(queue, new object[] { i }) as ICanvasElement;
@@ -291,32 +295,57 @@ namespace CanvasInvalidationTracker
                 if (tr == null) continue;
 
                 var go  = tr.gameObject;
-                long key = ((long)RuntimeHelpers.GetHashCode(go) << 1)
-                         | (type == InvalidationType.Layout ? 0L : 1L);
-                if (!s_SeenThisCapture.Add(key)) continue;
+                long captureKey = ((long)RuntimeHelpers.GetHashCode(go) << 1)
+                                | (type == InvalidationType.Layout ? 0L : 1L);
+                if (!s_SeenThisCapture.Add(captureKey)) continue;
 
-                // Look up the trace that was stored when this element was enqueued
                 string trace = null;
                 if (s_PendingTraces.TryGetValue(element, out var pending))
                     trace = pending.trace;
 
-                s_Entries.Add(MakeEntry(go, type, element, trace));
-                added = true;
+                // Resolve canvas here so we can form the dedup key before allocating an entry
+                var    canvas     = go.GetComponentInParent<Canvas>(true);
+                string canvasName = canvas != null ? canvas.name : "(no canvas)";
+                long   dedupKey   = ComputeDedupKey(type, canvasName, trace);
+
+                if (s_DedupMap.TryGetValue(dedupKey, out var existing))
+                {
+                    existing.Count++;
+                }
+                else
+                {
+                    var entry = MakeEntry(go, type, element, trace, canvas, canvasName);
+                    s_Entries.Add(entry);
+                    s_DedupMap[dedupKey] = entry;
+                }
+                changed = true;
             }
 
             Trim();
-            return added;
+            return changed;
+        }
+
+        // Stable hash combining type, canvas name, and stack trace.
+        // Used as the key for s_DedupMap — collisions are astronomically unlikely in practice.
+        static long ComputeDedupKey(InvalidationType type, string canvasName, string stackTrace)
+        {
+            unchecked
+            {
+                long h = (long)(int)type * 2654435761L;
+                h ^= (long)(uint)(canvasName  ?? string.Empty).GetHashCode() * 2246822519L;
+                h ^= (long)(uint)(stackTrace  ?? string.Empty).GetHashCode() * 3266489917L;
+                return h;
+            }
         }
 
         static InvalidationEntry MakeEntry(GameObject go, InvalidationType type,
-                                           ICanvasElement element, string trace)
+                                           ICanvasElement element, string trace,
+                                           Canvas canvas, string canvasName)
         {
             var comps = go.GetComponents<Component>();
             var names = new string[comps.Length];
             for (int i = 0; i < comps.Length; i++)
                 names[i] = comps[i] != null ? comps[i].GetType().Name : "(missing)";
-
-            var canvas = go.GetComponentInParent<Canvas>(true);
 
             GraphicDirtyFlags flags = GraphicDirtyFlags.None;
             if (type == InvalidationType.Graphic && element is Graphic g)
@@ -335,7 +364,7 @@ namespace CanvasInvalidationTracker
                 HierarchyPath      = BuildPath(go.transform),
                 Target             = go,
                 ComponentTypeNames = names,
-                CanvasName         = canvas != null ? canvas.name : "(no canvas)",
+                CanvasName         = canvasName,
                 CanvasRenderMode   = canvas != null ? canvas.renderMode.ToString() : string.Empty,
                 Type               = type,
                 DirtyFlags         = flags,
@@ -355,13 +384,18 @@ namespace CanvasInvalidationTracker
 
         static void Trim()
         {
-            while (s_Entries.Count > s_MaxEntries)
-                s_Entries.RemoveAt(0);
+            if (s_Entries.Count <= s_MaxEntries) return;
+            s_Entries.RemoveRange(0, s_Entries.Count - s_MaxEntries);
+            // Rebuild the dedup map so it only references entries that are still alive
+            s_DedupMap.Clear();
+            foreach (var e in s_Entries)
+                s_DedupMap[ComputeDedupKey(e.Type, e.CanvasName, e.StackTrace)] = e;
         }
 
         public static void Clear()
         {
             s_Entries.Clear();
+            s_DedupMap.Clear();
             s_NextId = 0;
             s_PendingTraces.Clear();
             s_SeenThisCapture.Clear();

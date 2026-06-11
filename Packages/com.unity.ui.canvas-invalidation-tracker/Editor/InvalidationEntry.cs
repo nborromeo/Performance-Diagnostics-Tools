@@ -20,6 +20,7 @@ namespace CanvasInvalidationTracker
     public sealed class InvalidationEntry
     {
         public int    Id;
+        public int    Count = 1;
         public int    FrameNumber;
         public float  Time;
         public bool   IsInPlayMode;

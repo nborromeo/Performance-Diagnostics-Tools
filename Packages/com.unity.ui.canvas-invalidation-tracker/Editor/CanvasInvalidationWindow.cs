@@ -14,6 +14,7 @@ namespace CanvasInvalidationTracker
         const float k_FlagsWidth     = 24f;
         const float k_FrameWidth     = 54f;
         const float k_CanvasWidth    = 120f;
+        const float k_CountWidth     = 36f;
         const float k_HeaderHeight   = k_RowHeight;
         const float k_ToolbarHeight  = 21f;
 
@@ -193,11 +194,12 @@ namespace CanvasInvalidationTracker
         {
             EditorGUI.DrawRect(r, k_HeaderBg);
             float x = r.x + 8f;
-            DrawHeaderLabel(x,                                         r, "Type",   k_BadgeWidth + k_FlagsWidth);
-            DrawHeaderLabel(x + k_BadgeWidth + k_FlagsWidth,           r, "Frame",  k_FrameWidth);
+            DrawHeaderLabel(x,                                              r, "Type",   k_BadgeWidth + k_FlagsWidth);
+            DrawHeaderLabel(x + k_BadgeWidth + k_FlagsWidth,                r, "Frame",  k_FrameWidth);
             DrawHeaderLabel(x + k_BadgeWidth + k_FlagsWidth + k_FrameWidth, r, "Object",
-                            r.width - k_BadgeWidth - k_FlagsWidth - k_FrameWidth - k_CanvasWidth - 16f);
-            DrawHeaderLabel(r.xMax - k_CanvasWidth,                    r, "Canvas", k_CanvasWidth);
+                            r.width - k_BadgeWidth - k_FlagsWidth - k_FrameWidth - k_CanvasWidth - k_CountWidth - 16f);
+            DrawHeaderLabel(r.xMax - k_CanvasWidth - k_CountWidth,          r, "Canvas", k_CanvasWidth);
+            DrawHeaderLabel(r.xMax - k_CountWidth,                          r, "Count",  k_CountWidth);
         }
 
         static void DrawHeaderLabel(float x, Rect row, string text, float w)
@@ -249,12 +251,27 @@ namespace CanvasInvalidationTracker
 
             // Object name (truncated)
             float nameX = x + k_BadgeWidth + k_FlagsWidth + k_FrameWidth;
-            float nameW = r.width - k_BadgeWidth - k_FlagsWidth - k_FrameWidth - k_CanvasWidth - 16f;
+            float nameW = r.width - k_BadgeWidth - k_FlagsWidth - k_FrameWidth - k_CanvasWidth - k_CountWidth - 16f;
             GUI.Label(new Rect(nameX, ty, nameW, 14f), e.ObjectName, EditorStyles.miniLabel);
 
             // Canvas
-            GUI.Label(new Rect(r.xMax - k_CanvasWidth + 4f, ty, k_CanvasWidth - 8f, 14f),
+            GUI.Label(new Rect(r.xMax - k_CanvasWidth - k_CountWidth + 4f, ty, k_CanvasWidth - 8f, 14f),
                       e.CanvasName, EditorStyles.miniLabel);
+
+            // Count
+            if (e.Count > 1)
+            {
+                var countPrev = GUI.color;
+                GUI.color = new Color(1f, 0.85f, 0.25f, 1f);
+                GUI.Label(new Rect(r.xMax - k_CountWidth + 2f, ty, k_CountWidth - 4f, 14f),
+                          e.Count.ToString(), EditorStyles.miniBoldLabel);
+                GUI.color = countPrev;
+            }
+            else
+            {
+                GUI.Label(new Rect(r.xMax - k_CountWidth + 2f, ty, k_CountWidth - 4f, 14f),
+                          "1", EditorStyles.miniLabel);
+            }
 
             // Click handler
             if (Event.current.type == EventType.MouseDown && r.Contains(Event.current.mousePosition))
@@ -325,6 +342,7 @@ namespace CanvasInvalidationTracker
             // ── Invalidation ──────────────────────────────────────────────
             DrawSectionHeader("Invalidation Details");
             DrawField("Type",  e.Type.ToString());
+            DrawField("Count", e.Count > 1 ? $"{e.Count}×" : "1");
             DrawField("Frame", $"#{e.FrameNumber}");
             DrawField("Time",  $"{e.Time:F3} s");
             DrawField("Mode",  e.IsInPlayMode ? "Play Mode" : "Edit Mode");
