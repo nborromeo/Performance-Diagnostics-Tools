@@ -65,6 +65,11 @@ namespace CanvasInvalidationTracker
         static readonly Dictionary<long, InvalidationEntry> s_DedupMap =
             new Dictionary<long, InvalidationEntry>();
 
+        // Trace cache: maps cheap (no-file-info) trace key → full (file-info) formatted result.
+        // PDB symbol resolution is paid exactly once per unique call path, then reused forever.
+        static readonly Dictionary<string, (string trace, StackFrameInfo[] frames)> s_TraceCache =
+            new Dictionary<string, (string, StackFrameInfo[])>();
+
         // ── Public API ───────────────────────────────────────────────────────
         public static IReadOnlyList<InvalidationEntry> Entries  => s_Entries;
         public static bool IsPaused    { get => s_Paused; set => s_Paused = value; }
@@ -213,14 +218,22 @@ namespace CanvasInvalidationTracker
         [MethodImpl(MethodImplOptions.NoInlining)]
         static void StorePendingTrace(ICanvasElement element, InvalidationType type)
         {
-            if (s_Paused || element == null) return;
+            if (s_Paused || element == null || Changed == null) return;
 
             // Keep the first trace for this element within one frame
             if (s_PendingTraces.ContainsKey(element)) return;
 
-            var st = new StackTrace(skipFrames: 2, fNeedFileInfo: true);
-            var (trace, frames) = FormatTrace(st);
-            s_PendingTraces[element] = (type, trace, frames);
+            // Cheap capture (no PDB lookups) used as a cache key.
+            string cacheKey = new StackTrace(skipFrames: 2, fNeedFileInfo: false).ToString();
+
+            if (!s_TraceCache.TryGetValue(cacheKey, out var cached))
+            {
+                // First time we see this call path: pay the PDB cost once, then cache it.
+                cached = FormatTrace(new StackTrace(skipFrames: 2, fNeedFileInfo: true));
+                s_TraceCache[cacheKey] = cached;
+            }
+
+            s_PendingTraces[element] = (type, cached.trace, cached.frames);
         }
 
         static (string trace, StackFrameInfo[] frames) FormatTrace(StackTrace st)
@@ -413,6 +426,7 @@ namespace CanvasInvalidationTracker
         {
             s_Entries.Clear();
             s_DedupMap.Clear();
+            s_TraceCache.Clear();
             s_NextId = 0;
             s_PendingTraces.Clear();
             s_SeenThisCapture.Clear();
