@@ -21,8 +21,9 @@ namespace CanvasInvalidationTracker
         const string k_ColCount  = "count";
 
         // ── Colors ───────────────────────────────────────────────────────────
-        static readonly Color k_Layout      = new Color(0.35f, 0.65f, 1.00f, 1f);
-        static readonly Color k_Graphic     = new Color(0.30f, 0.90f, 0.50f, 1f);
+        static readonly Color k_Layout         = new Color(0.35f, 0.65f, 1.00f, 1f);
+        static readonly Color k_Graphic        = new Color(0.30f, 0.90f, 0.50f, 1f);
+        static readonly Color k_CanvasRenderer = new Color(1.00f, 0.60f, 0.20f, 1f);
         static readonly Color k_PlayBg      = new Color(1f,    0.85f, 0.30f, 0.08f);
         static readonly Color k_EditBg      = new Color(0.30f, 0.50f, 1.00f, 0.05f);
         static readonly Color k_DividerLine = new Color(1f,    1f,    1f,    0.10f);
@@ -34,8 +35,9 @@ namespace CanvasInvalidationTracker
         int       m_SelectedId = -1;
         InvalidationEntry m_Selected;
 
-        bool m_ShowLayout  = true;
-        bool m_ShowGraphic = true;
+        bool m_ShowLayout         = true;
+        bool m_ShowGraphic        = true;
+        bool m_ShowCanvasRenderer = true;
 
         readonly List<InvalidationEntry> m_Filtered    = new List<InvalidationEntry>();
         bool                             m_FilterDirty = true;
@@ -264,24 +266,43 @@ namespace CanvasInvalidationTracker
             var badge = el.Q<Label>("badge");
             var flags = el.Q<Label>("flags");
 
-            bool  isLayout = e.Type == InvalidationType.Layout;
-            Color typeCol  = isLayout ? k_Layout : k_Graphic;
+            Color typeCol = e.Type switch
+            {
+                InvalidationType.Layout         => k_Layout,
+                InvalidationType.CanvasRenderer => k_CanvasRenderer,
+                _                               => k_Graphic,
+            };
 
             strip.style.backgroundColor = typeCol;
-            badge.text                  = isLayout ? "LAYOUT" : "GRAPHIC";
             badge.style.color           = typeCol;
+            badge.tooltip               = "";
 
-            if (e.Type == InvalidationType.Graphic && e.DirtyFlags != GraphicDirtyFlags.None)
+            switch (e.Type)
             {
-                string f = "";
-                if ((e.DirtyFlags & GraphicDirtyFlags.Vertices) != 0) f += "V";
-                if ((e.DirtyFlags & GraphicDirtyFlags.Material)  != 0) f += "M";
-                flags.text                  = f;
-                flags.style.display         = DisplayStyle.Flex;
-            }
-            else
-            {
-                flags.style.display = DisplayStyle.None;
+                case InvalidationType.Layout:
+                    badge.text = "LAYOUT";
+                    flags.style.display = DisplayStyle.None;
+                    break;
+                case InvalidationType.CanvasRenderer:
+                    badge.text    = e.MethodName ?? "CR";
+                    badge.tooltip = "CanvasRenderer native setter — bypasses CanvasUpdateRegistry";
+                    flags.style.display = DisplayStyle.None;
+                    break;
+                default:
+                    badge.text = "GRAPHIC";
+                    if (e.DirtyFlags != GraphicDirtyFlags.None)
+                    {
+                        string f = "";
+                        if ((e.DirtyFlags & GraphicDirtyFlags.Vertices) != 0) f += "V";
+                        if ((e.DirtyFlags & GraphicDirtyFlags.Material)  != 0) f += "M";
+                        flags.text          = f;
+                        flags.style.display = DisplayStyle.Flex;
+                    }
+                    else
+                    {
+                        flags.style.display = DisplayStyle.None;
+                    }
+                    break;
             }
 
             // Tint the whole row for play- vs edit-mode context.
@@ -404,8 +425,9 @@ namespace CanvasInvalidationTracker
             m_Filtered.Clear();
             foreach (var e in CanvasInvalidationService.Entries)
             {
-                if (!m_ShowLayout  && e.Type == InvalidationType.Layout)  continue;
-                if (!m_ShowGraphic && e.Type == InvalidationType.Graphic) continue;
+                if (!m_ShowLayout         && e.Type == InvalidationType.Layout)         continue;
+                if (!m_ShowGraphic        && e.Type == InvalidationType.Graphic)        continue;
+                if (!m_ShowCanvasRenderer && e.Type == InvalidationType.CanvasRenderer) continue;
                 m_Filtered.Add(e);
             }
         }
@@ -426,8 +448,9 @@ namespace CanvasInvalidationTracker
             GUILayout.Space(6);
 
             EditorGUI.BeginChangeCheck();
-            m_ShowLayout  = GUILayout.Toggle(m_ShowLayout,  "Layout",  EditorStyles.toolbarButton, GUILayout.Width(52));
-            m_ShowGraphic = GUILayout.Toggle(m_ShowGraphic, "Graphic", EditorStyles.toolbarButton, GUILayout.Width(58));
+            m_ShowLayout         = GUILayout.Toggle(m_ShowLayout,         "Layout",  EditorStyles.toolbarButton, GUILayout.Width(52));
+            m_ShowGraphic        = GUILayout.Toggle(m_ShowGraphic,        "Graphic", EditorStyles.toolbarButton, GUILayout.Width(58));
+            m_ShowCanvasRenderer = GUILayout.Toggle(m_ShowCanvasRenderer, "CR",      EditorStyles.toolbarButton, GUILayout.Width(34));
             if (EditorGUI.EndChangeCheck())
             {
                 m_FilterDirty = true;
@@ -578,11 +601,17 @@ namespace CanvasInvalidationTracker
             }
             else if (string.IsNullOrEmpty(e.StackTrace))
             {
-                EditorGUILayout.HelpBox(
-                    "No trace was captured for this entry.\n" +
-                    "This can happen when the element was already in the queue " +
-                    "before the tracker installed its patches (e.g. during startup).",
-                    MessageType.Info);
+                if (e.Type == InvalidationType.CanvasRenderer)
+                    EditorGUILayout.HelpBox(
+                        $"CanvasRenderer.{e.MethodName ?? "?"} — no trace captured.\n" +
+                        "This can happen when patching is inactive on this platform.",
+                        MessageType.Warning);
+                else
+                    EditorGUILayout.HelpBox(
+                        "No trace was captured for this entry.\n" +
+                        "This can happen when the element was already in the queue " +
+                        "before the tracker installed its patches (e.g. during startup).",
+                        MessageType.Info);
             }
             else
             {

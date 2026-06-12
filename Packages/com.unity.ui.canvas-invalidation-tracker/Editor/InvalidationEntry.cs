@@ -6,7 +6,8 @@ namespace CanvasInvalidationTracker
     public enum InvalidationType
     {
         Layout,
-        Graphic
+        Graphic,
+        CanvasRenderer
     }
 
     [Flags]
@@ -35,6 +36,14 @@ namespace CanvasInvalidationTracker
 
         public InvalidationType  Type;
         public GraphicDirtyFlags DirtyFlags;
+
+        // Populated for InvalidationType.CanvasRenderer entries — the specific
+        // CanvasRenderer method that was called (e.g. "SetColor", "SetMesh").
+        public string MethodName;
+
+        // True for CanvasRenderer entries — the invalidation bypassed the managed
+        // CanvasUpdateRegistry and went directly through native CanvasRenderer setters.
+        public bool NativeOnly;
 
         // Call-site stack trace captured at the moment of queue registration.
         // Null when the method detour could not be installed on this platform.

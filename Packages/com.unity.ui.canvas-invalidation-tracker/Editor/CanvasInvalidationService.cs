@@ -32,7 +32,7 @@ namespace CanvasInvalidationTracker
     [InitializeOnLoad]
     public static class CanvasInvalidationService
     {
-        // ── Reflection handles ───────────────────────────────────────────────
+        // ── Reflection handles — CanvasUpdateRegistry ────────────────────────
         static readonly FieldInfo  s_RegistryInstance;
         static readonly FieldInfo  s_LayoutQueueField;
         static readonly FieldInfo  s_GraphicQueueField;
@@ -40,6 +40,26 @@ namespace CanvasInvalidationTracker
         static readonly FieldInfo  s_MaterialDirtyField;
         static readonly MethodInfo s_InternalLayout;
         static readonly MethodInfo s_InternalGraphic;
+
+        // ── Reflection handles — CanvasRenderer native forwarding ────────────
+        static readonly FieldInfo  s_NativePtrField;  // UnityEngine.Object.m_CachedPtr
+
+        static readonly MethodInfo s_CR_SetColor_Inj;
+        static readonly MethodInfo s_CR_EnableRectClipping_Inj;
+        static readonly MethodInfo s_CR_DisableRectClipping_Inj;
+        static readonly MethodInfo s_CR_SetMaterial_Inj;
+        static readonly MethodInfo s_CR_SetPopMaterial_Inj;
+        static readonly MethodInfo s_CR_SetTexture_Inj;
+        static readonly MethodInfo s_CR_SetSecondaryTextureCount_Inj;
+        static readonly MethodInfo s_CR_SetAlphaTexture_Inj;
+        static readonly MethodInfo s_CR_SetMesh_Inj;
+        static readonly MethodInfo s_CR_Clear_Inj;
+        static readonly MethodInfo s_CR_set_hasPopInstruction_Inj;
+        static readonly MethodInfo s_CR_set_materialCount_Inj;
+        static readonly MethodInfo s_CR_set_popMaterialCount_Inj;
+        static readonly MethodInfo s_CR_set_cullTransparentMesh_Inj;
+        static readonly MethodInfo s_CR_set_cull_Inj;
+        static readonly MethodInfo s_CR_set_clippingSoftness_Inj;
 
         // IndexedSet<ICanvasElement> reflection — resolved lazily
         static PropertyInfo s_QueueCount;
@@ -57,6 +77,11 @@ namespace CanvasInvalidationTracker
         static int  s_NextId;
         static bool s_Paused;
         static int  s_MaxEntries = 1000;
+
+        // ── Pending CanvasRenderer events (populated by hooks, drained in Capture) ──
+        // Tuple: renderer, method name, formatted trace, structured frames, frame#, time, playMode
+        static readonly List<(CanvasRenderer r, string method, string trace, StackFrameInfo[] frames, int frame, float time, bool play)>
+            s_PendingCREvents = new List<(CanvasRenderer, string, string, StackFrameInfo[], int, float, bool)>();
 
         // Per-capture dedup (RuntimeHelpers.GetHashCode is stable & doesn't call deprecated API)
         static readonly HashSet<long> s_SeenThisCapture = new HashSet<long>();
@@ -110,6 +135,30 @@ namespace CanvasInvalidationTracker
             var graphicType      = typeof(Graphic);
             s_VertsDirtyField    = graphicType.GetField("m_VertsDirty",    instPriv);
             s_MaterialDirtyField = graphicType.GetField("m_MaterialDirty", instPriv);
+
+            // ── CanvasRenderer native forwarding handles ─────────────────────
+            s_NativePtrField = typeof(UnityEngine.Object)
+                .GetField("m_CachedPtr", BindingFlags.NonPublic | BindingFlags.Instance);
+
+            var crType = typeof(CanvasRenderer);
+            const BindingFlags crPriv = BindingFlags.Static | BindingFlags.NonPublic;
+
+            s_CR_SetColor_Inj                 = crType.GetMethod("SetColor_Injected",                crPriv);
+            s_CR_EnableRectClipping_Inj       = crType.GetMethod("EnableRectClipping_Injected",       crPriv);
+            s_CR_DisableRectClipping_Inj      = crType.GetMethod("DisableRectClipping_Injected",      crPriv);
+            s_CR_SetMaterial_Inj              = crType.GetMethod("SetMaterial_Injected",              crPriv);
+            s_CR_SetPopMaterial_Inj           = crType.GetMethod("SetPopMaterial_Injected",           crPriv);
+            s_CR_SetTexture_Inj               = crType.GetMethod("SetTexture_Injected",               crPriv);
+            s_CR_SetSecondaryTextureCount_Inj = crType.GetMethod("SetSecondaryTextureCount_Injected", crPriv);
+            s_CR_SetAlphaTexture_Inj          = crType.GetMethod("SetAlphaTexture_Injected",          crPriv);
+            s_CR_SetMesh_Inj                  = crType.GetMethod("SetMesh_Injected",                  crPriv);
+            s_CR_Clear_Inj                    = crType.GetMethod("Clear_Injected",                    crPriv);
+            s_CR_set_hasPopInstruction_Inj    = crType.GetMethod("set_hasPopInstruction_Injected",    crPriv);
+            s_CR_set_materialCount_Inj        = crType.GetMethod("set_materialCount_Injected",        crPriv);
+            s_CR_set_popMaterialCount_Inj     = crType.GetMethod("set_popMaterialCount_Injected",     crPriv);
+            s_CR_set_cullTransparentMesh_Inj  = crType.GetMethod("set_cullTransparentMesh_Injected",  crPriv);
+            s_CR_set_cull_Inj                 = crType.GetMethod("set_cull_Injected",                 crPriv);
+            s_CR_set_clippingSoftness_Inj     = crType.GetMethod("set_clippingSoftness_Injected",     crPriv);
 
             EditorApplication.playModeStateChanged += _ => s_SeenThisCapture.Clear();
             EditorApplication.delayCall += LateInitialize;
@@ -175,6 +224,38 @@ namespace CanvasInvalidationTracker
                 Canvas.willRenderCanvases += Capture;
                 var _ = CanvasUpdateRegistry.instance;
             }
+
+            // ── Patch CanvasRenderer native-path setters ─────────────────────
+            var crType2 = typeof(CanvasRenderer);
+            const BindingFlags instPub  = BindingFlags.Instance | BindingFlags.Public;
+            const BindingFlags selfPriv = BindingFlags.Static   | BindingFlags.NonPublic;
+
+            void PatchCR(MethodBase orig, string hookName)
+            {
+                if (orig == null) return;
+                var hook = selfType.GetMethod(hookName, selfPriv);
+                if (!MinimalPatcher.TryPatch(orig, hook))
+                    UnityEngine.Debug.LogWarning(
+                        $"[CanvasInvalidationTracker] CanvasRenderer patch failed: {hookName}");
+            }
+
+            PatchCR(crType2.GetMethod("SetColor",      instPub, null, new[] { typeof(Color) },    null), nameof(Hook_CR_SetColor));
+            PatchCR(crType2.GetMethod("EnableRectClipping",  instPub, null, new[] { typeof(Rect) }, null), nameof(Hook_CR_EnableRectClipping));
+            PatchCR(crType2.GetMethod("DisableRectClipping", instPub, null, Type.EmptyTypes,         null), nameof(Hook_CR_DisableRectClipping));
+            PatchCR(crType2.GetMethod("SetMaterial",   instPub, null, new[] { typeof(Material), typeof(int) },      null), nameof(Hook_CR_SetMaterial));
+            PatchCR(crType2.GetMethod("SetPopMaterial",instPub, null, new[] { typeof(Material), typeof(int) },      null), nameof(Hook_CR_SetPopMaterial));
+            PatchCR(crType2.GetMethod("SetTexture",    instPub, null, new[] { typeof(Texture) },   null), nameof(Hook_CR_SetTexture));
+            PatchCR(crType2.GetMethod("SetSecondaryTextureCount", instPub, null, new[] { typeof(int) }, null), nameof(Hook_CR_SetSecondaryTextureCount));
+            PatchCR(crType2.GetMethod("SetAlphaTexture", instPub, null, new[] { typeof(Texture) }, null), nameof(Hook_CR_SetAlphaTexture));
+            PatchCR(crType2.GetMethod("SetMesh",       instPub, null, new[] { typeof(Mesh) },      null), nameof(Hook_CR_SetMesh));
+            PatchCR(crType2.GetMethod("Clear",         instPub, null, Type.EmptyTypes,              null), nameof(Hook_CR_Clear));
+
+            PatchCR(crType2.GetProperty("hasPopInstruction",   instPub)?.GetSetMethod(), nameof(Hook_CR_set_hasPopInstruction));
+            PatchCR(crType2.GetProperty("materialCount",       instPub)?.GetSetMethod(), nameof(Hook_CR_set_materialCount));
+            PatchCR(crType2.GetProperty("popMaterialCount",    instPub)?.GetSetMethod(), nameof(Hook_CR_set_popMaterialCount));
+            PatchCR(crType2.GetProperty("cullTransparentMesh", instPub)?.GetSetMethod(), nameof(Hook_CR_set_cullTransparentMesh));
+            PatchCR(crType2.GetProperty("cull",                instPub)?.GetSetMethod(), nameof(Hook_CR_set_cull));
+            PatchCR(crType2.GetProperty("clippingSoftness",    instPub)?.GetSetMethod(), nameof(Hook_CR_set_clippingSoftness));
         }
 
         // ── Hook methods (replacements for the patched originals) ────────────
@@ -209,6 +290,160 @@ namespace CanvasInvalidationTracker
             StorePendingTrace(element, InvalidationType.Graphic);
             return s_InternalGraphic != null
                 && (bool)s_InternalGraphic.Invoke(CanvasUpdateRegistry.instance, new object[] { element });
+        }
+
+        // ── CanvasRenderer hook methods ──────────────────────────────────────
+        // Each hook: (1) captures a pending trace, (2) forwards to the _Injected
+        // native method via reflection so the renderer state is still updated.
+        // First parameter maps to the implicit `this` of the instance method.
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static void Hook_CR_SetColor(CanvasRenderer self, Color color)
+        {
+            StorePendingCRTrace(self, "SetColor");
+            var ptr = GetNativePtr(self);
+            if (ptr != IntPtr.Zero) s_CR_SetColor_Inj?.Invoke(null, new object[] { ptr, color });
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static void Hook_CR_EnableRectClipping(CanvasRenderer self, Rect rect)
+        {
+            StorePendingCRTrace(self, "EnableRectClipping");
+            var ptr = GetNativePtr(self);
+            if (ptr != IntPtr.Zero) s_CR_EnableRectClipping_Inj?.Invoke(null, new object[] { ptr, rect });
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static void Hook_CR_DisableRectClipping(CanvasRenderer self)
+        {
+            StorePendingCRTrace(self, "DisableRectClipping");
+            var ptr = GetNativePtr(self);
+            if (ptr != IntPtr.Zero) s_CR_DisableRectClipping_Inj?.Invoke(null, new object[] { ptr });
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static void Hook_CR_SetMaterial(CanvasRenderer self, Material material, int index)
+        {
+            StorePendingCRTrace(self, "SetMaterial");
+            var ptr = GetNativePtr(self);
+            if (ptr != IntPtr.Zero) s_CR_SetMaterial_Inj?.Invoke(null, new object[] { ptr, GetNativePtr(material), index });
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static void Hook_CR_SetPopMaterial(CanvasRenderer self, Material material, int index)
+        {
+            StorePendingCRTrace(self, "SetPopMaterial");
+            var ptr = GetNativePtr(self);
+            if (ptr != IntPtr.Zero) s_CR_SetPopMaterial_Inj?.Invoke(null, new object[] { ptr, GetNativePtr(material), index });
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static void Hook_CR_SetTexture(CanvasRenderer self, Texture texture)
+        {
+            StorePendingCRTrace(self, "SetTexture");
+            var ptr = GetNativePtr(self);
+            if (ptr != IntPtr.Zero) s_CR_SetTexture_Inj?.Invoke(null, new object[] { ptr, GetNativePtr(texture) });
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static void Hook_CR_SetSecondaryTextureCount(CanvasRenderer self, int size)
+        {
+            StorePendingCRTrace(self, "SetSecondaryTextureCount");
+            var ptr = GetNativePtr(self);
+            if (ptr != IntPtr.Zero) s_CR_SetSecondaryTextureCount_Inj?.Invoke(null, new object[] { ptr, size });
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static void Hook_CR_SetAlphaTexture(CanvasRenderer self, Texture texture)
+        {
+            StorePendingCRTrace(self, "SetAlphaTexture");
+            var ptr = GetNativePtr(self);
+            if (ptr != IntPtr.Zero) s_CR_SetAlphaTexture_Inj?.Invoke(null, new object[] { ptr, GetNativePtr(texture) });
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static void Hook_CR_SetMesh(CanvasRenderer self, Mesh mesh)
+        {
+            StorePendingCRTrace(self, "SetMesh");
+            var ptr = GetNativePtr(self);
+            if (ptr != IntPtr.Zero) s_CR_SetMesh_Inj?.Invoke(null, new object[] { ptr, GetNativePtr(mesh) });
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static void Hook_CR_Clear(CanvasRenderer self)
+        {
+            StorePendingCRTrace(self, "Clear");
+            var ptr = GetNativePtr(self);
+            if (ptr != IntPtr.Zero) s_CR_Clear_Inj?.Invoke(null, new object[] { ptr });
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static void Hook_CR_set_hasPopInstruction(CanvasRenderer self, bool value)
+        {
+            StorePendingCRTrace(self, "hasPopInstruction");
+            var ptr = GetNativePtr(self);
+            if (ptr != IntPtr.Zero) s_CR_set_hasPopInstruction_Inj?.Invoke(null, new object[] { ptr, value });
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static void Hook_CR_set_materialCount(CanvasRenderer self, int value)
+        {
+            StorePendingCRTrace(self, "materialCount");
+            var ptr = GetNativePtr(self);
+            if (ptr != IntPtr.Zero) s_CR_set_materialCount_Inj?.Invoke(null, new object[] { ptr, value });
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static void Hook_CR_set_popMaterialCount(CanvasRenderer self, int value)
+        {
+            StorePendingCRTrace(self, "popMaterialCount");
+            var ptr = GetNativePtr(self);
+            if (ptr != IntPtr.Zero) s_CR_set_popMaterialCount_Inj?.Invoke(null, new object[] { ptr, value });
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static void Hook_CR_set_cullTransparentMesh(CanvasRenderer self, bool value)
+        {
+            StorePendingCRTrace(self, "cullTransparentMesh");
+            var ptr = GetNativePtr(self);
+            if (ptr != IntPtr.Zero) s_CR_set_cullTransparentMesh_Inj?.Invoke(null, new object[] { ptr, value });
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static void Hook_CR_set_cull(CanvasRenderer self, bool value)
+        {
+            StorePendingCRTrace(self, "cull");
+            var ptr = GetNativePtr(self);
+            if (ptr != IntPtr.Zero) s_CR_set_cull_Inj?.Invoke(null, new object[] { ptr, value });
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static void Hook_CR_set_clippingSoftness(CanvasRenderer self, Vector2 value)
+        {
+            StorePendingCRTrace(self, "clippingSoftness");
+            var ptr = GetNativePtr(self);
+            if (ptr != IntPtr.Zero) s_CR_set_clippingSoftness_Inj?.Invoke(null, new object[] { ptr, value });
+        }
+
+        static IntPtr GetNativePtr(UnityEngine.Object obj) =>
+            s_NativePtrField != null && obj != null
+                ? (IntPtr)s_NativePtrField.GetValue(obj)
+                : IntPtr.Zero;
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static void StorePendingCRTrace(CanvasRenderer renderer, string methodName)
+        {
+            if (s_Paused || renderer == null || Changed == null) return;
+
+            string cacheKey = new StackTrace(skipFrames: 2, fNeedFileInfo: false).ToString();
+            if (!s_TraceCache.TryGetValue(cacheKey, out var cached))
+            {
+                cached = FormatTrace(new StackTrace(skipFrames: 2, fNeedFileInfo: true));
+                s_TraceCache[cacheKey] = cached;
+            }
+
+            s_PendingCREvents.Add((renderer, methodName, cached.trace, cached.frames,
+                                   Time.frameCount, Time.realtimeSinceStartup, Application.isPlaying));
         }
 
         // ── Trace capture ────────────────────────────────────────────────────
@@ -298,9 +533,69 @@ namespace CanvasInvalidationTracker
             changed |= DrainQueue(layoutQueue,  InvalidationType.Layout);
             changed |= DrainQueue(graphicQueue, InvalidationType.Graphic);
             s_PendingTraces.Clear();
+            changed |= DrainCREvents();
 
             if (changed)
                 Changed?.Invoke();
+        }
+
+        static bool DrainCREvents()
+        {
+            if (s_PendingCREvents.Count == 0) return false;
+
+            bool changed = false;
+            foreach (var (renderer, method, trace, frames, frame, time, play) in s_PendingCREvents)
+            {
+                if (renderer == null) continue;
+
+                var go = renderer.gameObject;
+                // Use same captureKey bit pattern as Graphic so a GO already recorded
+                // via the managed hook is not double-counted.
+                long captureKey = ((long)RuntimeHelpers.GetHashCode(go) << 1) | 1L;
+                if (!s_SeenThisCapture.Add(captureKey)) continue;
+
+                var    canvas     = go.GetComponentInParent<Canvas>(true);
+                string canvasName = canvas != null ? canvas.name : "(no canvas)";
+                long   dedupKey   = ComputeDedupKey(InvalidationType.CanvasRenderer, canvasName, trace);
+
+                if (s_DedupMap.TryGetValue(dedupKey, out var existing))
+                {
+                    existing.Count++;
+                }
+                else
+                {
+                    var comps = go.GetComponents<Component>();
+                    var names = new string[comps.Length];
+                    for (int i = 0; i < comps.Length; i++)
+                        names[i] = comps[i] != null ? comps[i].GetType().Name : "(missing)";
+
+                    var entry = new InvalidationEntry
+                    {
+                        Id                 = s_NextId++,
+                        FrameNumber        = frame,
+                        Time               = time,
+                        IsInPlayMode       = play,
+                        ObjectName         = go.name,
+                        HierarchyPath      = BuildPath(go.transform),
+                        Target             = go,
+                        ComponentTypeNames = names,
+                        CanvasName         = canvasName,
+                        CanvasRenderMode   = canvas != null ? canvas.renderMode.ToString() : string.Empty,
+                        Type               = InvalidationType.CanvasRenderer,
+                        MethodName         = method,
+                        NativeOnly         = true,
+                        StackTrace         = trace,
+                        StackFrames        = frames,
+                    };
+                    s_Entries.Add(entry);
+                    s_DedupMap[dedupKey] = entry;
+                }
+                changed = true;
+            }
+
+            s_PendingCREvents.Clear();
+            Trim();
+            return changed;
         }
 
         static bool DrainQueue(object queue, InvalidationType type)
@@ -429,6 +724,7 @@ namespace CanvasInvalidationTracker
             s_TraceCache.Clear();
             s_NextId = 0;
             s_PendingTraces.Clear();
+            s_PendingCREvents.Clear();
             s_SeenThisCapture.Clear();
             Changed?.Invoke();
         }

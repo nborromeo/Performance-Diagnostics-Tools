@@ -6,3 +6,5 @@ Temp
 UserSettings
 *.csproj
 *.sln
+*.user
+ProfilerCaptures
