@@ -32,7 +32,8 @@ namespace CanvasInvalidationTracker
         // ── State ────────────────────────────────────────────────────────────
         Vector2   m_DetailsScroll;
         Vector2   m_TraceScroll;
-        int       m_SelectedId = -1;
+        int       m_SelectedId   = -1;
+        int       m_TraceIndex   = 0;
         InvalidationEntry m_Selected;
 
         bool m_ShowLayout         = true;
@@ -590,7 +591,25 @@ namespace CanvasInvalidationTracker
             GUILayout.Space(6);
 
             // ── Call-site Stack Trace ─────────────────────────────────────
-            DrawSectionHeader("Call-site Stack Trace");
+            int traceCount = e.Traces.Count;
+            m_TraceIndex = Mathf.Clamp(m_TraceIndex, 0, Mathf.Max(0, traceCount - 1));
+
+            // Header row: title + cycler when there are multiple traces
+            GUILayout.BeginHorizontal();
+            DrawSectionHeader(traceCount > 1 ? $"Call-site Stack Traces  ({traceCount} unique)" : "Call-site Stack Trace");
+            GUILayout.FlexibleSpace();
+            if (traceCount > 1)
+            {
+                if (GUILayout.Button("◀", EditorStyles.miniButton, GUILayout.Width(22))
+                    && m_TraceIndex > 0)
+                { m_TraceIndex--; m_TraceScroll = Vector2.zero; }
+                GUILayout.Label($"{m_TraceIndex + 1} / {traceCount}",
+                    EditorStyles.miniLabel, GUILayout.Width(42));
+                if (GUILayout.Button("▶", EditorStyles.miniButton, GUILayout.Width(22))
+                    && m_TraceIndex < traceCount - 1)
+                { m_TraceIndex++; m_TraceScroll = Vector2.zero; }
+            }
+            GUILayout.EndHorizontal();
 
             if (!CanvasInvalidationService.IsPatchingActive)
             {
@@ -599,7 +618,7 @@ namespace CanvasInvalidationTracker
                     "stack traces are unavailable.",
                     MessageType.Warning);
             }
-            else if (string.IsNullOrEmpty(e.StackTrace))
+            else if (traceCount == 0)
             {
                 if (e.Type == InvalidationType.CanvasRenderer)
                     EditorGUILayout.HelpBox(
@@ -615,7 +634,7 @@ namespace CanvasInvalidationTracker
             }
             else
             {
-                var frames = e.StackFrames;
+                var (currentTrace, currentFrames) = e.Traces[m_TraceIndex];
                 var labelColor = EditorStyles.label.normal.textColor;
 
                 var frameStyle = new GUIStyle(EditorStyles.label)
@@ -635,15 +654,15 @@ namespace CanvasInvalidationTracker
                 linkStyle.active.textColor  = Color.white;
 
                 float lineH = frameStyle.lineHeight + 2f;
-                int   count = frames != null ? frames.Length : e.StackTrace.Split('\n').Length;
+                int   count = currentFrames != null ? currentFrames.Length : currentTrace.Split('\n').Length;
                 float textH = Mathf.Max(60f, count * lineH);
 
                 m_TraceScroll = GUILayout.BeginScrollView(
                     m_TraceScroll, GUILayout.Height(Mathf.Min(textH, 280f)));
 
-                if (frames != null)
+                if (currentFrames != null)
                 {
-                    foreach (var f in frames)
+                    foreach (var f in currentFrames)
                     {
                         bool hasFile = !string.IsNullOrEmpty(f.FilePath) && f.Line > 0;
                         if (hasFile)
@@ -660,14 +679,14 @@ namespace CanvasInvalidationTracker
                 }
                 else
                 {
-                    GUILayout.Label(e.StackTrace, frameStyle);
+                    GUILayout.Label(currentTrace, frameStyle);
                 }
 
                 GUILayout.EndScrollView();
 
                 if (GUILayout.Button("Copy to Clipboard", EditorStyles.miniButton,
                                      GUILayout.Width(130)))
-                    GUIUtility.systemCopyBuffer = e.StackTrace;
+                    GUIUtility.systemCopyBuffer = currentTrace;
             }
 
             GUILayout.EndScrollView();
@@ -704,8 +723,8 @@ namespace CanvasInvalidationTracker
         {
             m_SelectedId  = entry.Id;
             m_Selected    = entry;
+            m_TraceIndex  = 0;
             m_TraceScroll = Vector2.zero;
-
             Repaint();
         }
     }

@@ -41,6 +41,18 @@ namespace CanvasInvalidationTracker
         static readonly MethodInfo s_InternalLayout;
         static readonly MethodInfo s_InternalGraphic;
 
+        // ── Reflection handles — CrossFade tween forwarding ─────────────────
+        // 5-param CrossFadeColor is the actual implementation; 4-param and CrossFadeAlpha
+        // delegate to it.  We patch the entry points and forward to the 5-param overload.
+        static readonly MethodInfo s_CrossFadeColor5;  // CrossFadeColor(Color,float,bool,bool,bool)
+
+        // Tween-trace store: captures the originating stack when CrossFadeColor /
+        // CrossFadeAlpha is called.  Keyed by Graphic so that when the per-frame
+        // TweenValue → CanvasRenderer.SetColor fires (with a truncated coroutine
+        // stack), we substitute the rich originating trace instead.
+        static readonly Dictionary<Graphic, (string trace, StackFrameInfo[] frames)>
+            s_TweenTraces = new Dictionary<Graphic, (string, StackFrameInfo[])>();
+
         // ── Reflection handles — CanvasRenderer native forwarding ────────────
         static readonly FieldInfo  s_NativePtrField;  // UnityEngine.Object.m_CachedPtr
 
@@ -135,6 +147,13 @@ namespace CanvasInvalidationTracker
             var graphicType      = typeof(Graphic);
             s_VertsDirtyField    = graphicType.GetField("m_VertsDirty",    instPriv);
             s_MaterialDirtyField = graphicType.GetField("m_MaterialDirty", instPriv);
+
+            // 5-param CrossFadeColor is the internal implementation that both the
+            // 4-param overload and CrossFadeAlpha delegate to — not patched, used
+            // as the forwarding target from our CrossFade hooks.
+            const BindingFlags instPubVirt = BindingFlags.Instance | BindingFlags.Public;
+            s_CrossFadeColor5 = graphicType.GetMethod("CrossFadeColor", instPubVirt, null,
+                new[] { typeof(Color), typeof(float), typeof(bool), typeof(bool), typeof(bool) }, null);
 
             // ── CanvasRenderer native forwarding handles ─────────────────────
             s_NativePtrField = typeof(UnityEngine.Object)
@@ -256,6 +275,18 @@ namespace CanvasInvalidationTracker
             PatchCR(crType2.GetProperty("cullTransparentMesh", instPub)?.GetSetMethod(), nameof(Hook_CR_set_cullTransparentMesh));
             PatchCR(crType2.GetProperty("cull",                instPub)?.GetSetMethod(), nameof(Hook_CR_set_cull));
             PatchCR(crType2.GetProperty("clippingSoftness",    instPub)?.GetSetMethod(), nameof(Hook_CR_set_clippingSoftness));
+
+            // ── Patch CrossFade entry points to capture originating stacks ────
+            // We only patch the 4-param CrossFadeColor and CrossFadeAlpha (the
+            // public entry points called by Selectable etc.), and forward to the
+            // 5-param overload which is the actual implementation and stays unpatched.
+            var graphicType2 = typeof(Graphic);
+            PatchCR(graphicType2.GetMethod("CrossFadeColor", instPub, null,
+                        new[] { typeof(Color), typeof(float), typeof(bool), typeof(bool) }, null),
+                    nameof(Hook_CrossFadeColor));
+            PatchCR(graphicType2.GetMethod("CrossFadeAlpha", instPub, null,
+                        new[] { typeof(float), typeof(float), typeof(bool) }, null),
+                    nameof(Hook_CrossFadeAlpha));
         }
 
         // ── Hook methods (replacements for the patched originals) ────────────
@@ -292,6 +323,50 @@ namespace CanvasInvalidationTracker
                 && (bool)s_InternalGraphic.Invoke(CanvasUpdateRegistry.instance, new object[] { element });
         }
 
+        // ── CrossFade hooks — capture originating stack before coroutine spawns ─
+        // These fire while the full call stack is still intact (before StartCoroutine
+        // hands control to the scheduler).  We store the trace per-Graphic so that
+        // subsequent per-frame TweenValue → CanvasRenderer.SetColor calls can look
+        // it up instead of recording a truncated coroutine-resume stack.
+        // Forwarding goes to the 5-param overload which is the actual implementation
+        // and is deliberately left unpatched.
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static void Hook_CrossFadeColor(Graphic self, Color targetColor, float duration,
+                                        bool ignoreTimeScale, bool useAlpha)
+        {
+            StoreTweenTrace(self);
+            s_CrossFadeColor5?.Invoke(self,
+                new object[] { targetColor, duration, ignoreTimeScale, useAlpha, true });
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static void Hook_CrossFadeAlpha(Graphic self, float alpha, float duration, bool ignoreTimeScale)
+        {
+            StoreTweenTrace(self);
+            // CrossFadeAlpha delegates to CrossFadeColor(5-param) with useRGB=false.
+            if (s_CrossFadeColor5 != null && self != null)
+            {
+                var c = self.canvasRenderer != null ? self.canvasRenderer.GetColor() : Color.white;
+                c.a = alpha;
+                s_CrossFadeColor5.Invoke(self, new object[] { c, duration, ignoreTimeScale, true, false });
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static void StoreTweenTrace(Graphic graphic)
+        {
+            if (s_Paused || graphic == null || Changed == null) return;
+
+            string cacheKey = new StackTrace(skipFrames: 2, fNeedFileInfo: false).ToString();
+            if (!s_TraceCache.TryGetValue(cacheKey, out var cached))
+            {
+                cached = FormatTrace(new StackTrace(skipFrames: 2, fNeedFileInfo: true));
+                s_TraceCache[cacheKey] = cached;
+            }
+            s_TweenTraces[graphic] = cached;
+        }
+
         // ── CanvasRenderer hook methods ──────────────────────────────────────
         // Each hook: (1) captures a pending trace, (2) forwards to the _Injected
         // native method via reflection so the renderer state is still updated.
@@ -300,6 +375,23 @@ namespace CanvasInvalidationTracker
         [MethodImpl(MethodImplOptions.NoInlining)]
         static void Hook_CR_SetColor(CanvasRenderer self, Color color)
         {
+            // If this SetColor originates from a CrossFade tween, substitute the
+            // originating stack (captured when CrossFadeColor/Alpha was called)
+            // instead of the truncated coroutine-resume stack.
+            if (self != null)
+            {
+                var g = self.gameObject.GetComponent<Graphic>();
+                if (g != null && s_TweenTraces.TryGetValue(g, out var tweenTrace))
+                {
+                    if (!s_Paused && Changed != null)
+                        s_PendingCREvents.Add((self, "SetColor (CrossFade)", tweenTrace.trace,
+                                              tweenTrace.frames, Time.frameCount,
+                                              Time.realtimeSinceStartup, Application.isPlaying));
+                    var ptr2 = GetNativePtr(self);
+                    if (ptr2 != IntPtr.Zero) s_CR_SetColor_Inj?.Invoke(null, new object[] { ptr2, color });
+                    return;
+                }
+            }
             StorePendingCRTrace(self, "SetColor");
             var ptr = GetNativePtr(self);
             if (ptr != IntPtr.Zero) s_CR_SetColor_Inj?.Invoke(null, new object[] { ptr, color });
@@ -436,6 +528,14 @@ namespace CanvasInvalidationTracker
             if (s_Paused || renderer == null || Changed == null) return;
 
             string cacheKey = new StackTrace(skipFrames: 2, fNeedFileInfo: false).ToString();
+
+            // Skip CR events that originate inside CanvasUpdateRegistry.PerformUpdate
+            // (triggered by Canvas.SendWillRenderCanvases).  Those are the downstream
+            // consequence of managed Graphic/Layout invalidations we already captured —
+            // recording them again as CanvasRenderer entries would be redundant.
+            if (cacheKey.Contains("CanvasUpdateRegistry") || cacheKey.Contains("SendWillRenderCanvases"))
+                return;
+
             if (!s_TraceCache.TryGetValue(cacheKey, out var cached))
             {
                 cached = FormatTrace(new StackTrace(skipFrames: 2, fNeedFileInfo: true));
@@ -556,11 +656,13 @@ namespace CanvasInvalidationTracker
 
                 var    canvas     = go.GetComponentInParent<Canvas>(true);
                 string canvasName = canvas != null ? canvas.name : "(no canvas)";
-                long   dedupKey   = ComputeDedupKey(InvalidationType.CanvasRenderer, canvasName, trace);
+                long   goHash     = (long)RuntimeHelpers.GetHashCode(go);
+                long   dedupKey   = ComputeDedupKey(InvalidationType.CanvasRenderer, canvasName, goHash, method);
 
                 if (s_DedupMap.TryGetValue(dedupKey, out var existing))
                 {
                     existing.Count++;
+                    AddTraceIfNew(existing, trace, frames);
                 }
                 else
                 {
@@ -584,9 +686,8 @@ namespace CanvasInvalidationTracker
                         Type               = InvalidationType.CanvasRenderer,
                         MethodName         = method,
                         NativeOnly         = true,
-                        StackTrace         = trace,
-                        StackFrames        = frames,
                     };
+                    if (trace != null) entry.Traces.Add((trace, frames));
                     s_Entries.Add(entry);
                     s_DedupMap[dedupKey] = entry;
                 }
@@ -629,11 +730,13 @@ namespace CanvasInvalidationTracker
                 // Resolve canvas here so we can form the dedup key before allocating an entry
                 var    canvas     = go.GetComponentInParent<Canvas>(true);
                 string canvasName = canvas != null ? canvas.name : "(no canvas)";
-                long   dedupKey   = ComputeDedupKey(type, canvasName, trace);
+                long   goHash     = (long)RuntimeHelpers.GetHashCode(go);
+                long   dedupKey   = ComputeDedupKey(type, canvasName, goHash, null);
 
                 if (s_DedupMap.TryGetValue(dedupKey, out var existing))
                 {
                     existing.Count++;
+                    AddTraceIfNew(existing, trace, frames);
                 }
                 else
                 {
@@ -648,17 +751,27 @@ namespace CanvasInvalidationTracker
             return changed;
         }
 
-        // Stable hash combining type, canvas name, and stack trace.
-        // Used as the key for s_DedupMap — collisions are astronomically unlikely in practice.
-        static long ComputeDedupKey(InvalidationType type, string canvasName, string stackTrace)
+        // Stable hash keyed on identity (type + canvas + GO + method), NOT on stack trace.
+        // Different call sites that dirty the same GO are aggregated into one entry whose
+        // Traces list grows; Count tracks total invalidation occurrences.
+        static long ComputeDedupKey(InvalidationType type, string canvasName, long goHash, string methodName)
         {
             unchecked
             {
                 long h = (long)(int)type * 2654435761L;
                 h ^= (long)(uint)(canvasName  ?? string.Empty).GetHashCode() * 2246822519L;
-                h ^= (long)(uint)(stackTrace  ?? string.Empty).GetHashCode() * 3266489917L;
+                h ^= goHash                                                   * 3266489917L;
+                h ^= (long)(uint)(methodName  ?? string.Empty).GetHashCode() * 2870177191L;
                 return h;
             }
+        }
+
+        static void AddTraceIfNew(InvalidationEntry entry, string trace, StackFrameInfo[] frames)
+        {
+            if (string.IsNullOrEmpty(trace)) return;
+            foreach (var t in entry.Traces)
+                if (t.trace == trace) return;
+            entry.Traces.Add((trace, frames));
         }
 
         static InvalidationEntry MakeEntry(GameObject go, InvalidationType type,
@@ -678,7 +791,7 @@ namespace CanvasInvalidationTracker
                 if (s_MaterialDirtyField != null && s_MaterialDirtyField.GetValue(g) is bool m && m) flags |= GraphicDirtyFlags.Material;
             }
 
-            return new InvalidationEntry
+            var entry = new InvalidationEntry
             {
                 Id                 = s_NextId++,
                 FrameNumber        = Time.frameCount,
@@ -692,9 +805,9 @@ namespace CanvasInvalidationTracker
                 CanvasRenderMode   = canvas != null ? canvas.renderMode.ToString() : string.Empty,
                 Type               = type,
                 DirtyFlags         = flags,
-                StackTrace         = trace,
-                StackFrames        = frames
             };
+            if (trace != null) entry.Traces.Add((trace, frames));
+            return entry;
         }
 
         // ── Helpers ──────────────────────────────────────────────────────────
@@ -714,7 +827,10 @@ namespace CanvasInvalidationTracker
             // Rebuild the dedup map so it only references entries that are still alive
             s_DedupMap.Clear();
             foreach (var e in s_Entries)
-                s_DedupMap[ComputeDedupKey(e.Type, e.CanvasName, e.StackTrace)] = e;
+            {
+                long goHash = e.Target != null ? (long)RuntimeHelpers.GetHashCode(e.Target) : 0L;
+                s_DedupMap[ComputeDedupKey(e.Type, e.CanvasName, goHash, e.MethodName)] = e;
+            }
         }
 
         public static void Clear()
@@ -725,6 +841,7 @@ namespace CanvasInvalidationTracker
             s_NextId = 0;
             s_PendingTraces.Clear();
             s_PendingCREvents.Clear();
+            s_TweenTraces.Clear();
             s_SeenThisCapture.Clear();
             Changed?.Invoke();
         }

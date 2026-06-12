@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace CanvasInvalidationTracker
@@ -45,14 +46,15 @@ namespace CanvasInvalidationTracker
         // CanvasUpdateRegistry and went directly through native CanvasRenderer setters.
         public bool NativeOnly;
 
-        // Call-site stack trace captured at the moment of queue registration.
-        // Null when the method detour could not be installed on this platform.
-        public string StackTrace;
+        // All unique call-site stack traces observed for this entry.
+        // Multiple traces accumulate when the same GO+canvas+type is invalidated
+        // from different call sites across frames.
+        public readonly List<(string trace, StackFrameInfo[] frames)> Traces =
+            new List<(string, StackFrameInfo[])>();
 
-        // Structured per-frame data for clickable stack trace links.
-        // Parallel to the lines in StackTrace; FilePath may be null for frames
-        // without debug info (e.g. Unity internals compiled without symbols).
-        public StackFrameInfo[] StackFrames;
+        // Shortcuts to the first trace — kept for convenience.
+        public string           StackTrace  => Traces.Count > 0 ? Traces[0].trace  : null;
+        public StackFrameInfo[] StackFrames => Traces.Count > 0 ? Traces[0].frames : null;
     }
 
     public struct StackFrameInfo
