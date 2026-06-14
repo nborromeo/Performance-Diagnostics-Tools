@@ -58,13 +58,17 @@ Logs every call that adds an element to the Canvas layout or graphic rebuild que
 
 ### How it works
 
-The tool patches four methods in `CanvasUpdateRegistry` at the native code level using a 14-byte JMP detour (Windows, macOS, and Linux Editor builds are supported). When any of these methods is called, a hook captures the current stack trace and stores it. Just before the Canvas processes its rebuild queues, the tool pairs each queued element with its captured trace and records an entry.
+The tool patches methods at the native code level using a 14-byte JMP detour (Windows, macOS, and Linux Editor builds are supported). When any patched method is called, a hook captures the current stack trace and stores it.
 
-The patched methods are:
+**CanvasUpdateRegistry** — patched to catch managed layout and graphic rebuild registrations:
 - `RegisterCanvasElementForLayoutRebuild`
 - `TryRegisterCanvasElementForLayoutRebuild`
 - `RegisterCanvasElementForGraphicRebuild`
 - `TryRegisterCanvasElementForGraphicRebuild`
+
+**CanvasRenderer** — patched to catch native setter calls that bypass `CanvasUpdateRegistry` entirely (e.g. `SetColor`, `SetMesh`). These appear as **CR** (orange) entries in the list. CanvasRenderer events that are a downstream consequence of a managed Graphic/Layout invalidation already captured in the same frame are suppressed automatically to avoid duplicate noise.
+
+**Graphic tween methods** — `CrossFadeColor` (all overloads) and `CrossFadeAlpha` are patched to attribute per-frame tween updates to their originating call site rather than to the tween engine internals.
 
 The **Traces ON / Traces OFF** indicator in the toolbar shows whether patching succeeded. If it shows OFF, entries are still captured but without call stacks.
 
@@ -74,18 +78,20 @@ The **Traces ON / Traces OFF** indicator in the toolbar shows whether patching s
 |---------|-------------|
 | **Clear** | Removes all captured entries |
 | **Pause / Resume** | Temporarily stops capturing new entries |
-| **Layout / Graphic** | Toggle filters for each invalidation type |
+| **Layout / Graphic / CR** | Toggle filters for each invalidation type |
 | **Max** | Maximum number of entries to keep (oldest are trimmed) |
 | **Traces ON/OFF** | Green = patching active, Orange = patching inactive |
 
 ### Reading the entry list
 
-Each row in the list shows:
-- **Type badge** — `LAYOUT` (blue) or `GRAPHIC` (green)
+The list uses sortable, resizable columns — click any column header to sort by that field. The columns are:
+
+- **Type badge** — `LAYOUT` (blue), `GRAPHIC` (green), or the CanvasRenderer method name (orange) for CR entries
 - **Dirty flags** — `V` (vertices) and/or `M` (material), for Graphic entries only
 - **Frame** — the frame number when the invalidation was registered
 - **Object** — the name of the invalidated GameObject
 - **Canvas** — the Canvas the object belongs to
+- **Count** — how many times the same invalidation was registered in the same frame (repeated invalidations are folded into one row with a count badge)
 
 Rows with a yellow background were captured during Play Mode; blue background rows were captured in Edit Mode.
 
@@ -97,13 +103,15 @@ Selecting an entry opens the details panel on the right:
 - **Invalidation Details** — type, frame, time, mode, and dirty flags
 - **Canvas** — Canvas name and render mode
 - **Components** — all components on the GameObject at capture time
-- **Call-site Stack Trace** — the full managed call stack from the moment the element was queued for rebuild. Use **Copy to Clipboard** to paste it into an editor or bug report.
+- **Call-site Stack Trace** — the full managed call stack from the moment the element was queued for rebuild. Stack frames that resolve to a source file are rendered as clickable links — clicking opens the file at the correct line in your script editor. When multiple unique call stacks produced the same invalidation (folded rows), use the **◀ ▶** arrows to page through each distinct trace. Use **Copy to Clipboard** to paste the current trace into an editor or bug report.
 
 ### Common findings
 
 - A stack trace showing `Graphic.SetVerticesDirty` or `Graphic.SetMaterialDirty` called from an `Update` or animation callback every frame means a graphic is being dirtied continuously — the most common cause of constant rebuilds.
 - Layout invalidations triggered by `LayoutRebuilder.MarkLayoutForRebuild` on stable objects usually point to a script calling `SetActive`, changing a `RectTransform`, or modifying layout component properties unnecessarily.
 - If many objects share the same stack trace, fix it once at the call site to eliminate all of them.
+- **CR entries with a high Count** indicate a CanvasRenderer property (color, mesh, etc.) being set every frame from script. These bypass the managed rebuild path and won't appear as Layout or Graphic entries, making them easy to miss without this tool.
+- **Multiple unique traces on a single folded row** (shown via the ◀ ▶ pager) means the same object is being invalidated by more than one code path in the same frame — each trace is a separate fix target.
 
 ### Requirements
 
