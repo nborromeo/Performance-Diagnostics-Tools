@@ -99,22 +99,32 @@ The tool snapshots the world transform and collider state of every static collid
 
 | Control | Description |
 |---------|-------------|
-| **Interval** | Seconds between the two snapshots (0.05 – 5 s) |
-| **Continuous** | When enabled, keeps re-snapshotting and updating results live; **Start/Stop** replaces **Capture** |
+| **Interval (s)** | Seconds between the two snapshots (0.05 – 5 s) |
+| **Continuous** | When enabled, keeps re-snapshotting and updating results live; **Start / Stop** replaces **Capture** |
+| **Limit Iterations** | Only available in Continuous mode. Caps the number of captures before auto-stopping |
+| **Max Iterations** | How many captures to run before stopping (1 – 1000) |
 | **Capture / Start** | Takes the first snapshot and begins waiting |
-| **Select** | Pings and selects the offending GameObject in the Hierarchy |
+| **Stop** | Stops a running continuous capture; shows current progress as `Stop (N / Max)` |
+| **Clear** | Removes all accumulated results |
 
 ### Reading the results
 
-Each row names the offending GameObject and shows the reason it was flagged:
+Results are displayed as a table — one row per unique GameObject, persisting across captures. Counts accumulate: if the same GO is flagged 10 times across 10 continuous captures, each relevant column increments by 1 each time. Click any row to ping and select the object in the Hierarchy. Destroyed GameObjects appear in grey and cannot be selected.
 
-| Label | Meaning |
-|-------|---------|
-| Position / Rotation / Scale | The transform changed between snapshots |
-| GO Activated / GO Deactivated | `activeInHierarchy` flipped |
-| GO Created / GO Destroyed | The GameObject was spawned or destroyed |
-| Collider Added / Collider Removed | A `Collider` component was added or destroyed |
-| Collider Enabled / Collider Disabled | A `Collider` component's `enabled` flag changed |
+| Column | Meaning |
+|--------|---------|
+| **Object** | GameObject name |
+| **Move** | How many captures detected a transform change (position, rotation, or scale) |
+| **C+** | Collider component was added |
+| **C-** | Collider component was destroyed |
+| **C▲** | Collider component was enabled |
+| **C▼** | Collider component was disabled |
+| **Act** | `activeInHierarchy` flipped from false → true |
+| **Deact** | `activeInHierarchy` flipped from true → false |
+| **Born** | GO did not exist in the previous snapshot (was spawned) |
+| **Dead** | GO was present in the previous snapshot but is now gone (was destroyed) |
+
+All column headers and cells show a tooltip with a plain-language description on hover.
 
 ### Requirements
 

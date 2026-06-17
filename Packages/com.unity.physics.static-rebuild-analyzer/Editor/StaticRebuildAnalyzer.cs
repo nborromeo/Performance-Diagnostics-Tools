@@ -1,9 +1,15 @@
 using System.Collections.Generic;
+using System.Linq;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.UIElements;
 
 public class StaticRebuildAnalyzer : EditorWindow
 {
+    // -------------------------------------------------------------------------
+    // Snapshot types
+    // -------------------------------------------------------------------------
+
     private struct TransformSnapshot
     {
         public string     name;
@@ -27,39 +33,64 @@ public class StaticRebuildAnalyzer : EditorWindow
         GOActivated, GODeactivated, GOCreated, GODestroyed,
     }
 
-    // One accumulated entry per (GO, ChangeReason) pair
-    private class AccumulatedResult
+    // -------------------------------------------------------------------------
+    // Accumulated data — one row per unique GO
+    // -------------------------------------------------------------------------
+
+    private class GOEntry
     {
-        public GameObject go;       // null when GO was destroyed
+        public GameObject go;       // null when destroyed
         public string     goName;
-        public ChangeReason reason;
-        public int        count;
-        // transform sub-counts — only meaningful when reason == Transform
-        public int        posCount;
-        public int        rotCount;
-        public int        sclCount;
+
+        public int transformCount;
+        public int posCount, rotCount, sclCount;
+
+        public int colliderAddedCount;
+        public int colliderRemovedCount;
+        public int colliderEnabledCount;
+        public int colliderDisabledCount;
+
+        public int goActivatedCount;
+        public int goDeactivatedCount;
+        public int goCreatedCount;
+        public int goDestroyedCount;
     }
+
+    // -------------------------------------------------------------------------
+    // Constants
+    // -------------------------------------------------------------------------
 
     private const float POSITION_THRESHOLD = 0.0001f;
     private const float ROTATION_THRESHOLD = 0.0001f;
     private const float SCALE_THRESHOLD    = 0.0001f;
 
+    // -------------------------------------------------------------------------
+    // State
+    // -------------------------------------------------------------------------
+
     private Dictionary<GameObject, TransformSnapshot> _transformSnap;
     private Dictionary<Collider,   ColliderEntry>     _colliderSnap;
 
-    // Persistent across captures: key = (goName, reason) for destroyed GOs, (go, reason) for live ones
-    private readonly List<AccumulatedResult>                              _accumulated = new();
-    private readonly Dictionary<(GameObject go, ChangeReason r), AccumulatedResult> _liveIndex    = new();
-    private readonly Dictionary<(string name, ChangeReason r),  AccumulatedResult> _destroyedIndex = new();
+    private readonly List<GOEntry>                 _entries        = new();
+    private readonly Dictionary<GameObject, GOEntry> _liveIndex    = new();
+    private readonly Dictionary<string,     GOEntry> _destroyedIndex = new();
 
-    private Vector2 _scrollPos;
-    private bool    _isCapturing;
-    private double  _captureTime;
-    private float   _interval        = 0.5f;
-    private bool    _continuous;
-    private bool    _limitIterations;
-    private int     _maxIterations   = 10;
-    private int     _iterationCount;
+    private bool   _isCapturing;
+    private double _captureTime;
+    private float  _interval        = 0.5f;
+    private bool   _continuous;
+    private bool   _limitIterations;
+    private int    _maxIterations   = 10;
+    private int    _iterationCount;
+
+    // UI references updated at runtime
+    private MultiColumnListView _tableView;
+    private Button              _captureBtn;
+    private Label               _rowCountLabel;
+
+    // -------------------------------------------------------------------------
+    // Window
+    // -------------------------------------------------------------------------
 
     [MenuItem("Window/Analysis/Static Rebuild Analyzer")]
     public static void ShowWindow() => GetWindow<StaticRebuildAnalyzer>("Static Rebuild Analyzer");
@@ -67,130 +98,235 @@ public class StaticRebuildAnalyzer : EditorWindow
     private void OnEnable()  => EditorApplication.update += OnEditorUpdate;
     private void OnDisable() => EditorApplication.update -= OnEditorUpdate;
 
-    private void OnGUI()
+    public void CreateGUI()
     {
-        EditorGUILayout.Space(6);
-        EditorGUILayout.LabelField("Static Rebuild Analyzer", EditorStyles.boldLabel);
-        EditorGUILayout.HelpBox(
-            "Reports static colliders (no Rigidbody in parent chain) that moved, had a collider " +
-            "added/removed/toggled, or had their GameObject created/destroyed/activated/deactivated. " +
-            "All trigger a broadphase rebuild.",
-            MessageType.Info);
+        var root = rootVisualElement;
+        root.style.paddingTop    = 6;
+        root.style.paddingLeft   = 6;
+        root.style.paddingRight  = 6;
+        root.style.paddingBottom = 6;
 
-        EditorGUILayout.Space(4);
-        _interval        = EditorGUILayout.Slider("Interval (seconds)", _interval, 0.05f, 5f);
-        _continuous      = EditorGUILayout.Toggle("Continuous", _continuous);
+        root.Add(new HelpBox(
+            "Detects static colliders (no Rigidbody in parent chain) that moved, toggled, " +
+            "or had their GO created / destroyed / activated / deactivated. Click any row to select the object.",
+            HelpBoxMessageType.Info));
 
-        EditorGUI.BeginDisabledGroup(!_continuous);
-        _limitIterations = EditorGUILayout.Toggle("Limit Iterations", _limitIterations);
-        EditorGUI.BeginDisabledGroup(!_limitIterations);
-        _maxIterations   = EditorGUILayout.IntSlider("Max Iterations", _maxIterations, 1, 1000);
-        EditorGUI.EndDisabledGroup();
-        EditorGUI.EndDisabledGroup();
+        root.Add(MakeSettings());
+        root.Add(MakeButtonRow());
 
-        EditorGUILayout.Space(4);
-        EditorGUILayout.BeginHorizontal();
+        _rowCountLabel = new Label("No captures yet.");
+        _rowCountLabel.style.unityTextAlign = TextAnchor.MiddleLeft;
+        _rowCountLabel.style.color          = new Color(0.6f, 0.6f, 0.6f);
+        _rowCountLabel.style.marginBottom   = 4;
+        root.Add(_rowCountLabel);
 
-        if (_continuous && _isCapturing)
+        _tableView = BuildTable();
+        root.Add(_tableView);
+    }
+
+    // -------------------------------------------------------------------------
+    // Settings panel
+    // -------------------------------------------------------------------------
+
+    private VisualElement MakeSettings()
+    {
+        var box = new VisualElement();
+        box.style.marginTop    = 4;
+        box.style.marginBottom = 4;
+
+        var intervalSlider = new Slider("Interval (s)", 0.05f, 5f) { value = _interval, showInputField = true };
+        intervalSlider.RegisterValueChangedCallback(e => _interval = e.newValue);
+        box.Add(intervalSlider);
+
+        var continuousToggle = new Toggle("Continuous") { value = _continuous };
+
+        var limitToggle = new Toggle("Limit Iterations") { value = _limitIterations };
+        limitToggle.SetEnabled(_continuous);
+
+        var maxIterSlider = new SliderInt("Max Iterations", 1, 1000) { value = _maxIterations, showInputField = true };
+        maxIterSlider.SetEnabled(_continuous && _limitIterations);
+
+        continuousToggle.RegisterValueChangedCallback(e =>
         {
-            string stopLabel = _limitIterations
-                ? $"Stop  ({_iterationCount}/{_maxIterations})"
-                : $"Stop  (iteration {_iterationCount})";
-            if (GUILayout.Button(stopLabel, GUILayout.Height(30)))
+            _continuous = e.newValue;
+            limitToggle.SetEnabled(_continuous);
+            maxIterSlider.SetEnabled(_continuous && _limitIterations);
+            RefreshCaptureButton();
+        });
+        limitToggle.RegisterValueChangedCallback(e =>
+        {
+            _limitIterations = e.newValue;
+            maxIterSlider.SetEnabled(_continuous && _limitIterations);
+        });
+        maxIterSlider.RegisterValueChangedCallback(e => _maxIterations = e.newValue);
+
+        box.Add(continuousToggle);
+        box.Add(limitToggle);
+        box.Add(maxIterSlider);
+        return box;
+    }
+
+    private VisualElement MakeButtonRow()
+    {
+        var row = new VisualElement();
+        row.style.flexDirection = FlexDirection.Row;
+        row.style.marginBottom  = 4;
+
+        _captureBtn = new Button(OnCaptureClicked) { text = "Capture" };
+        _captureBtn.style.flexGrow = 1;
+        _captureBtn.style.height   = 28;
+
+        var clearBtn = new Button(ClearEntries) { text = "Clear" };
+        clearBtn.style.width  = 60;
+        clearBtn.style.height = 28;
+
+        row.Add(_captureBtn);
+        row.Add(clearBtn);
+        return row;
+    }
+
+    // -------------------------------------------------------------------------
+    // Table
+    // -------------------------------------------------------------------------
+
+    private MultiColumnListView BuildTable()
+    {
+        var lv = new MultiColumnListView
+        {
+            itemsSource                   = _entries,
+            showAlternatingRowBackgrounds = AlternatingRowBackground.ContentOnly,
+            selectionType                 = SelectionType.Single,
+            style                         = { flexGrow = 1 },
+        };
+
+        lv.selectionChanged += selected =>
+        {
+            if (selected.FirstOrDefault() is GOEntry entry && entry.go != null)
             {
-                _isCapturing = false;
-                Repaint();
+                Selection.activeGameObject = entry.go;
+                EditorGUIUtility.PingObject(entry.go);
             }
-        }
-        else
-        {
-            EditorGUI.BeginDisabledGroup(_isCapturing);
-            string label = _isCapturing
-                ? $"Capturing… ({EditorApplication.timeSinceStartup - _captureTime:F2}s / {_interval:F2}s)"
-                : (_continuous ? "Start" : "Capture");
-            if (GUILayout.Button(label, GUILayout.Height(30)))
-                StartCapture();
-            EditorGUI.EndDisabledGroup();
-        }
+        };
 
-        EditorGUI.BeginDisabledGroup(_accumulated.Count == 0);
-        if (GUILayout.Button("Clear", GUILayout.Height(30), GUILayout.Width(60)))
-            ClearAccumulated();
-        EditorGUI.EndDisabledGroup();
+        // Name column
+        lv.columns.reorderable = true;
+        lv.sortingEnabled = true;
+        lv.columnSortingChanged += () => ApplySort(_tableView);
 
-        EditorGUILayout.EndHorizontal();
+        lv.columns.Add(new Column
+        {
+            name        = "name",
+            title       = "Object",
+            sortable    = true,
+            width       = 180,
+            stretchable = true,
+            makeHeader  = () => MakeHeaderLabel("Object", "GameObject name. Grey = destroyed, no longer selectable."),
+            makeCell    = () => new Label { style = { unityTextAlign = TextAnchor.MiddleLeft, paddingLeft = 4 } },
+            bindCell    = (e, i) =>
+            {
+                var entry = _entries[i];
+                var lbl   = (Label)e;
+                lbl.text        = entry.goName;
+                lbl.style.color = entry.go == null
+                    ? new Color(0.55f, 0.55f, 0.55f)
+                    : new Color(0.9f,  0.9f,  0.9f);
+            },
+        });
 
-        if (_accumulated.Count > 0)
-        {
-            EditorGUILayout.Space(6);
-            EditorGUILayout.LabelField($"Results: {_accumulated.Count} unique issue(s)", EditorStyles.boldLabel);
-            _scrollPos = EditorGUILayout.BeginScrollView(_scrollPos);
-            foreach (var r in _accumulated)
-                DrawResult(r);
-            EditorGUILayout.EndScrollView();
-        }
-        else if (!_isCapturing && _transformSnap != null)
-        {
-            EditorGUILayout.Space(6);
-            EditorGUILayout.LabelField("No issues found.", EditorStyles.centeredGreyMiniLabel);
-        }
+        AddCountColumn(lv, "move",  "Move",  "Transform changed\nHow many captures detected this GO moving, rotating, or scaling.", e => e.transformCount);
+        AddCountColumn(lv, "c_add", "C+",    "Collider Added\nA Collider component was added to this GO.",                         e => e.colliderAddedCount);
+        AddCountColumn(lv, "c_rem", "C-",    "Collider Removed\nA Collider component was destroyed on this GO.",                   e => e.colliderRemovedCount);
+        AddCountColumn(lv, "c_on",  "C▲",    "Collider Enabled\nA Collider component was switched on (enabled = true).",           e => e.colliderEnabledCount);
+        AddCountColumn(lv, "c_off", "C▼",    "Collider Disabled\nA Collider component was switched off (enabled = false).",        e => e.colliderDisabledCount);
+        AddCountColumn(lv, "act",   "Act",   "GO Activated\nThis GO's activeInHierarchy flipped from false to true.",              e => e.goActivatedCount);
+        AddCountColumn(lv, "deact", "Deact", "GO Deactivated\nThis GO's activeInHierarchy flipped from true to false.",            e => e.goDeactivatedCount);
+        AddCountColumn(lv, "born",  "Born",  "GO Created\nThis GO did not exist in the previous snapshot.",                       e => e.goCreatedCount);
+        AddCountColumn(lv, "dead",  "Dead",  "GO Destroyed\nThis GO was present in the previous snapshot but is now gone.",       e => e.goDestroyedCount);
+
+        return lv;
     }
 
-    private static readonly Color _rowColor = new Color(0.5f, 0.1f, 0.1f, 0.3f);
-
-    private void DrawResult(AccumulatedResult r)
+    private void AddCountColumn(MultiColumnListView lv, string name, string title, string tooltip, System.Func<GOEntry, int> getValue)
     {
-        var rect = EditorGUILayout.BeginVertical();
-        EditorGUI.DrawRect(rect, _rowColor);
-
-        EditorGUILayout.BeginHorizontal();
-        EditorGUI.BeginDisabledGroup(r.go == null);
-        if (GUILayout.Button("Select", GUILayout.Width(55)) && r.go != null)
+        lv.columns.Add(new Column
         {
-            Selection.activeGameObject = r.go;
-            EditorGUIUtility.PingObject(r.go);
-        }
-        EditorGUI.EndDisabledGroup();
-        GUILayout.Label(r.goName, EditorStyles.boldLabel);
-        GUILayout.FlexibleSpace();
-        GUILayout.Label($"x{r.count}", EditorStyles.boldLabel, GUILayout.Width(40));
-        EditorGUILayout.EndHorizontal();
-
-        EditorGUILayout.BeginHorizontal();
-        GUILayout.Space(60);
-        switch (r.reason)
-        {
-            case ChangeReason.Transform:
-                if (r.posCount > 0) GUILayout.Label($"Position x{r.posCount}", EditorStyles.miniLabel, GUILayout.Width(85));
-                if (r.rotCount > 0) GUILayout.Label($"Rotation x{r.rotCount}", EditorStyles.miniLabel, GUILayout.Width(85));
-                if (r.sclCount > 0) GUILayout.Label($"Scale x{r.sclCount}",    EditorStyles.miniLabel, GUILayout.Width(70));
-                break;
-            case ChangeReason.ColliderAdded:    GUILayout.Label("Collider Added",    EditorStyles.miniLabel); break;
-            case ChangeReason.ColliderRemoved:  GUILayout.Label("Collider Removed",  EditorStyles.miniLabel); break;
-            case ChangeReason.ColliderEnabled:  GUILayout.Label("Collider Enabled",  EditorStyles.miniLabel); break;
-            case ChangeReason.ColliderDisabled: GUILayout.Label("Collider Disabled", EditorStyles.miniLabel); break;
-            case ChangeReason.GOActivated:      GUILayout.Label("GO Activated",      EditorStyles.miniLabel); break;
-            case ChangeReason.GODeactivated:    GUILayout.Label("GO Deactivated",    EditorStyles.miniLabel); break;
-            case ChangeReason.GOCreated:        GUILayout.Label("GO Created",        EditorStyles.miniLabel); break;
-            case ChangeReason.GODestroyed:      GUILayout.Label("GO Destroyed",      EditorStyles.miniLabel); break;
-        }
-        EditorGUILayout.EndHorizontal();
-
-        EditorGUILayout.EndVertical();
-        EditorGUILayout.Space(2);
+            name       = name,
+            title      = title,
+            width      = 46,
+            sortable   = true,
+            makeHeader = () => MakeHeaderLabel(title, tooltip),
+            makeCell   = () =>
+            {
+                var lbl = new Label { tooltip = tooltip };
+                lbl.style.unityTextAlign = TextAnchor.MiddleCenter;
+                return lbl;
+            },
+            bindCell = (e, i) =>
+            {
+                int count = getValue(_entries[i]);
+                var lbl   = (Label)e;
+                lbl.text        = count > 0 ? count.ToString() : string.Empty;
+                lbl.style.color = count > 0 ? Color.white : new Color(0.3f, 0.3f, 0.3f);
+            },
+        });
     }
 
-    private void ClearAccumulated()
+    private void ApplySort(MultiColumnListView lv)
     {
-        _accumulated.Clear();
-        _liveIndex.Clear();
-        _destroyedIndex.Clear();
-        Repaint();
+        var descs = lv.sortedColumns.ToList();
+        if (descs.Count == 0) return;
+
+        var desc = descs[0];
+        bool asc = desc.direction == SortDirection.Ascending;
+
+        _entries.Sort((a, b) =>
+        {
+            int cmp = desc.columnName switch
+            {
+                "name"   => string.Compare(a.goName, b.goName, System.StringComparison.OrdinalIgnoreCase),
+                "move"   => a.transformCount.CompareTo(b.transformCount),
+                "c_add"  => a.colliderAddedCount.CompareTo(b.colliderAddedCount),
+                "c_rem"  => a.colliderRemovedCount.CompareTo(b.colliderRemovedCount),
+                "c_on"   => a.colliderEnabledCount.CompareTo(b.colliderEnabledCount),
+                "c_off"  => a.colliderDisabledCount.CompareTo(b.colliderDisabledCount),
+                "act"    => a.goActivatedCount.CompareTo(b.goActivatedCount),
+                "deact"  => a.goDeactivatedCount.CompareTo(b.goDeactivatedCount),
+                "born"   => a.goCreatedCount.CompareTo(b.goCreatedCount),
+                "dead"   => a.goDestroyedCount.CompareTo(b.goDestroyedCount),
+                _        => 0,
+            };
+            return asc ? cmp : -cmp;
+        });
+
+        lv.RefreshItems();
+    }
+
+    private static Label MakeHeaderLabel(string title, string tooltip)
+    {
+        var lbl = new Label(title)
+        {
+            tooltip = tooltip,
+            style   = { unityTextAlign = TextAnchor.MiddleCenter, flexGrow = 1 },
+        };
+        return lbl;
     }
 
     // -------------------------------------------------------------------------
     // Capture flow
     // -------------------------------------------------------------------------
+
+    private void OnCaptureClicked()
+    {
+        if (_isCapturing && _continuous)
+        {
+            _isCapturing = false;
+            RefreshCaptureButton();
+        }
+        else
+        {
+            StartCapture();
+        }
+    }
 
     private void StartCapture()
     {
@@ -205,7 +341,7 @@ public class StaticRebuildAnalyzer : EditorWindow
         _captureTime    = EditorApplication.timeSinceStartup;
         _isCapturing    = true;
         _iterationCount = 0;
-        Repaint();
+        RefreshCaptureButton();
     }
 
     private void OnEditorUpdate()
@@ -215,14 +351,18 @@ public class StaticRebuildAnalyzer : EditorWindow
         if (!Application.isPlaying)
         {
             _isCapturing = false;
-            Repaint();
+            RefreshCaptureButton();
             return;
         }
+
+        RefreshCaptureButton(); // update elapsed time label while waiting
 
         if (EditorApplication.timeSinceStartup - _captureTime < _interval) return;
 
         MergeResults(Compare());
         _iterationCount++;
+        RefreshRowCount();
+        _tableView?.RefreshItems();
 
         if (_continuous && (!_limitIterations || _iterationCount < _maxIterations))
         {
@@ -232,48 +372,99 @@ public class StaticRebuildAnalyzer : EditorWindow
         else
         {
             _isCapturing = false;
+            RefreshCaptureButton();
         }
-        Repaint();
+    }
+
+    private void RefreshCaptureButton()
+    {
+        if (_captureBtn == null) return;
+
+        if (_isCapturing && _continuous)
+        {
+            _captureBtn.text = _limitIterations
+                ? $"Stop  ({_iterationCount} / {_maxIterations})"
+                : $"Stop  (iter {_iterationCount})";
+        }
+        else if (_isCapturing)
+        {
+            double elapsed = EditorApplication.timeSinceStartup - _captureTime;
+            _captureBtn.text = $"Capturing…  {elapsed:F2}s / {_interval:F2}s";
+        }
+        else
+        {
+            _captureBtn.text = _continuous ? "Start" : "Capture";
+        }
+    }
+
+    private void RefreshRowCount()
+    {
+        if (_rowCountLabel == null) return;
+        _rowCountLabel.text = _entries.Count == 0
+            ? "No issues found."
+            : $"{_entries.Count} unique GO(s) with issues  —  {_iterationCount} capture(s) so far";
+    }
+
+    private void ClearEntries()
+    {
+        _entries.Clear();
+        _liveIndex.Clear();
+        _destroyedIndex.Clear();
+        _tableView?.RefreshItems();
+        RefreshRowCount();
     }
 
     // -------------------------------------------------------------------------
-    // Accumulation
+    // Accumulation — merge raw detections into per-GO rows
     // -------------------------------------------------------------------------
 
     private void MergeResults(List<(GameObject go, string name, ChangeReason reason, bool pos, bool rot, bool scl)> fresh)
     {
         foreach (var (go, name, reason, pos, rot, scl) in fresh)
         {
-            AccumulatedResult entry = null;
+            GOEntry entry = FindOrCreateEntry(go, name);
 
-            if (go != null)
+            switch (reason)
             {
-                var key = (go, reason);
-                if (!_liveIndex.TryGetValue(key, out entry))
-                {
-                    entry = new AccumulatedResult { go = go, goName = name, reason = reason };
-                    _liveIndex[key] = entry;
-                    _accumulated.Add(entry);
-                }
+                case ChangeReason.Transform:
+                    entry.transformCount++;
+                    if (pos) entry.posCount++;
+                    if (rot) entry.rotCount++;
+                    if (scl) entry.sclCount++;
+                    break;
+                case ChangeReason.ColliderAdded:    entry.colliderAddedCount++;    break;
+                case ChangeReason.ColliderRemoved:  entry.colliderRemovedCount++;  break;
+                case ChangeReason.ColliderEnabled:  entry.colliderEnabledCount++;  break;
+                case ChangeReason.ColliderDisabled: entry.colliderDisabledCount++; break;
+                case ChangeReason.GOActivated:      entry.goActivatedCount++;      break;
+                case ChangeReason.GODeactivated:    entry.goDeactivatedCount++;    break;
+                case ChangeReason.GOCreated:        entry.goCreatedCount++;        break;
+                case ChangeReason.GODestroyed:      entry.goDestroyedCount++;      break;
             }
-            else
-            {
-                var key = (name, reason);
-                if (!_destroyedIndex.TryGetValue(key, out entry))
-                {
-                    entry = new AccumulatedResult { go = null, goName = name, reason = reason };
-                    _destroyedIndex[key] = entry;
-                    _accumulated.Add(entry);
-                }
-            }
+        }
+    }
 
-            entry.count++;
-            if (reason == ChangeReason.Transform)
+    private GOEntry FindOrCreateEntry(GameObject go, string name)
+    {
+        if (go != null)
+        {
+            if (!_liveIndex.TryGetValue(go, out var e))
             {
-                if (pos) entry.posCount++;
-                if (rot) entry.rotCount++;
-                if (scl) entry.sclCount++;
+                e = new GOEntry { go = go, goName = name };
+                _liveIndex[go] = e;
+                _entries.Add(e);
             }
+            return e;
+        }
+        else
+        {
+            if (!_destroyedIndex.TryGetValue(name, out var e))
+            {
+                e = new GOEntry { go = null, goName = name };
+                _destroyedIndex[name] = e;
+                _entries.Add(e);
+            }
+            return e;
         }
     }
 
@@ -307,7 +498,7 @@ public class StaticRebuildAnalyzer : EditorWindow
     }
 
     // -------------------------------------------------------------------------
-    // Compare — returns a flat list of raw detections for this interval
+    // Compare
     // -------------------------------------------------------------------------
 
     private List<(GameObject go, string name, ChangeReason reason, bool pos, bool rot, bool scl)> Compare()
@@ -324,11 +515,9 @@ public class StaticRebuildAnalyzer : EditorWindow
 
         var currentGOs = FindObjectsByType<GameObject>(FindObjectsInactive.Include, FindObjectsSortMode.None);
 
+        // Destroyed GOs
         foreach (var kvp in _transformSnap)
-        {
-            if (kvp.Key == null)
-                Add(null, kvp.Value.name, ChangeReason.GODestroyed);
-        }
+            if (kvp.Key == null) Add(null, kvp.Value.name, ChangeReason.GODestroyed);
 
         foreach (var go in currentGOs)
         {
@@ -337,8 +526,7 @@ public class StaticRebuildAnalyzer : EditorWindow
 
             if (!_transformSnap.TryGetValue(go, out var snap))
             {
-                if (HasColliderInSelfOrChildren(go))
-                    Add(go, go.name, ChangeReason.GOCreated);
+                if (HasColliderInSelfOrChildren(go)) Add(go, go.name, ChangeReason.GOCreated);
                 continue;
             }
 
@@ -372,10 +560,7 @@ public class StaticRebuildAnalyzer : EditorWindow
         }
 
         foreach (var kvp in _colliderSnap)
-        {
-            if (kvp.Key == null)
-                Add(kvp.Value.go, kvp.Value.goName, ChangeReason.ColliderRemoved);
-        }
+            if (kvp.Key == null) Add(kvp.Value.go, kvp.Value.goName, ChangeReason.ColliderRemoved);
 
         return results;
     }
