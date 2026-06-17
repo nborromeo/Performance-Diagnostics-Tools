@@ -91,6 +91,12 @@
       "dependencies": {},
       "url": "https://packages.unity.com"
     },
+    "com.unity.physics.static-rebuild-analyzer": {
+      "version": "file:com.unity.physics.static-rebuild-analyzer",
+      "depth": 0,
+      "source": "embedded",
+      "dependencies": {}
+    },
     "com.unity.render-pipelines.core": {
       "version": "17.6.0",
       "depth": 1,

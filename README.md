@@ -1,6 +1,6 @@
-# uGUI Diagnostics Tools
+# Consulting Diagnostics Tools
 
-A pair of Unity Editor tools for diagnosing uGUI Canvas rendering performance. Both tools are embedded packages that work in Unity 6000.0 and later.
+A collection of Unity Editor tools for diagnosing rendering and physics performance. All tools are embedded packages that work in Unity 6000.0 and later.
 
 ---
 
@@ -118,3 +118,47 @@ Selecting an entry opens the details panel on the right:
 - Unity 6000.0 or later
 - `com.unity.ugui` 2.0.0 or later
 - Native method patching requires Windows x64, macOS x64/arm64, or Linux x64 Editor. On other platforms entries are captured without stack traces.
+
+---
+
+## Static Rebuild Analyzer
+
+Detects static colliders — GameObjects with a `Collider` but no `Rigidbody` in their parent chain — that are causing physics broadphase rebuilds. Any of the following events on a static collider forces Unity to rebuild the broadphase every frame and tank physics performance:
+
+- The GameObject moved, rotated, or scaled
+- The GameObject was activated or deactivated
+- A `Collider` component was added or removed
+- A `Collider` component was enabled or disabled
+- The GameObject was created or destroyed
+
+**Open:** `Window > Analysis > Static Rebuild Analyzer`
+
+### How it works
+
+The tool snapshots the world transform and collider state of every static collider GO in the scene, waits a configurable interval, then diffs the two snapshots. Only GOs that have a `Collider` somewhere in their subtree and no `Rigidbody` anywhere in their parent chain are considered.
+
+### Controls
+
+| Control | Description |
+|---------|-------------|
+| **Interval** | Seconds between the two snapshots (0.05 – 5 s) |
+| **Continuous** | When enabled, keeps re-snapshotting and updating results live; **Start/Stop** replaces **Capture** |
+| **Capture / Start** | Takes the first snapshot and begins waiting |
+| **Select** | Pings and selects the offending GameObject in the Hierarchy |
+
+### Reading the results
+
+Each row names the offending GameObject and shows the reason it was flagged:
+
+| Label | Meaning |
+|-------|---------|
+| Position / Rotation / Scale | The transform changed between snapshots |
+| GO Activated / GO Deactivated | `activeInHierarchy` flipped |
+| GO Created / GO Destroyed | The GameObject was spawned or destroyed |
+| Collider Added / Collider Removed | A `Collider` component was added or destroyed |
+| Collider Enabled / Collider Disabled | A `Collider` component's `enabled` flag changed |
+
+### Requirements
+
+- Unity 6000.0 or later
+- Must be used in **Play Mode** — transforms must be live

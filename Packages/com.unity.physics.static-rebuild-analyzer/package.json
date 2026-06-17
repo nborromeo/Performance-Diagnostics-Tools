@@ -1,0 +1,8 @@
+{
+  "name": "com.unity.physics.static-rebuild-analyzer",
+  "version": "0.1.0",
+  "displayName": "Static Rebuild Analyzer",
+  "description": "Editor tool that detects static colliders (no Rigidbody in parent chain) that move, change active state, or are added/removed/toggled — all of which trigger a physics broadphase rebuild.",
+  "unity": "6000.0",
+  "type": "tool"
+}
