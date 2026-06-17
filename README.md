@@ -79,7 +79,7 @@ Selecting an entry opens the details panel on the right:
 
 ## Static Rebuild Analyzer
 
-<img width="1136" height="441" alt="image" src="https://github.com/user-attachments/assets/35e98aac-bd3a-42ba-9051-0f4b01f5e9bf" />
+<img width="1004" height="449" alt="image" src="https://github.com/user-attachments/assets/7492d859-e540-4a79-bd63-3d0fd154ca44" />
 
 Detects static colliders — GameObjects with a `Collider` but no `Rigidbody` in their parent chain — that are causing physics broadphase rebuilds. Any of the following events on a static collider forces Unity to rebuild the broadphase every frame and tank physics performance:
 
