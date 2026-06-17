@@ -1,4 +1,4 @@
-# Consulting Diagnostics Tools
+# Unity Performance Diagnostics Tools
 
 A collection of Unity Editor tools for diagnosing rendering and physics performance. All tools are embedded packages that work in Unity 6000.0 and later.
 
