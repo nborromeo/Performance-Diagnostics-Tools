@@ -4,11 +4,9 @@ A collection of Unity Editor tools for diagnosing rendering and physics performa
 
 ---
 
-## Performance Diagnostics
+## Runtime Project Auditor (aka Performance Diagnostics)
 
-<img width="1197" height="819" alt="image" src="https://github.com/user-attachments/assets/f78e6cbc-2e3d-47e3-9b94-3aef1192b6fc" />
-
-<img width="1004" height="449" alt="image" src="https://github.com/user-attachments/assets/7492d859-e540-4a79-bd63-3d0fd154ca44" />
+<img width="1336" height="456" alt="image" src="https://github.com/user-attachments/assets/7a57c3ef-4553-4b46-b09b-163ebb6733d0" />
 
 A unified window that runs multiple diagnostic detectors simultaneously and collects all findings into a single, sortable list. Each detector can be toggled and configured independently from the toolbar.
 
@@ -185,6 +183,8 @@ Stencil push/pop entries represent `Mask` components. Each nested mask adds one 
 ---
 
 ## Shader Variant Analyzer
+
+<img width="1080" height="492" alt="image" src="https://github.com/user-attachments/assets/9a360136-a1af-402e-9fb4-35f1055f8735" />
 
 Analyzes a shader's keyword declarations and the materials in the project that reference it, giving you a clear picture of how many shader variants are being compiled and what is driving that count.
 
