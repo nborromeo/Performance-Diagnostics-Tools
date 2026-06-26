@@ -16,16 +16,20 @@ namespace ShaderVariantAnalyzer.Editor
         sealed class KeywordData
         {
             public string Name;
-            public int PermutationCount;
-            public int MaterialCount;
+            public int    PermutationCount;
+            public int    MaterialCount;
+            public string FilePath;  // absolute path to the file where the pragma was found
+            public int    Line;      // 1-based line number
         }
 
         sealed class MultiCompileData
         {
-            public string   Name;        // display label, e.g. "_ | FOG_ON | FOG_EXP2"
-            public string[] Options;     // all options from the pragma, including "_"
+            public string   Name;        // display label, e.g. "FOG_ON | FOG_EXP2"
+            public string[] Options;     // relevant options for this shader, including "_"
             public int      OptionCount => Options.Length;
             public bool     IsBuiltin;   // true = not found in parsed source (Unity built-in)
+            public string   FilePath;    // null for built-in
+            public int      Line;        // 1-based line number, 0 if unknown
         }
 
         sealed class PermutationData
@@ -41,8 +45,12 @@ namespace ShaderVariantAnalyzer.Editor
 
         sealed class ParsedShaderInfo
         {
-            public HashSet<string> SfKeywords = new HashSet<string>(StringComparer.Ordinal);
-            public List<string[]>  McSets     = new List<string[]>();
+            // SF keyword name → (absolute file path, 1-based line); first declaration wins.
+            public Dictionary<string, (string file, int line)>              SfLocations = new Dictionary<string, (string, int)>(StringComparer.Ordinal);
+            // All MC pragma sets with their source location.
+            public List<(string[] tokens, string file, int line)>           McSets      = new List<(string[], string, int)>();
+
+            public HashSet<string> SfKeywords => new HashSet<string>(SfLocations.Keys, StringComparer.Ordinal);
         }
 
         // ── Window state ──────────────────────────────────────────────────────
@@ -63,6 +71,7 @@ namespace ShaderVariantAnalyzer.Editor
         readonly List<MultiCompileData> m_McKeywords = new List<MultiCompileData>();
         int  m_McSortCol = 1;
         bool m_McSortAsc = false;
+        int  m_SelectedMcIdx = -1;
         Vector2 m_McScroll;
 
         // Tab 2 — Permutations
@@ -106,41 +115,52 @@ namespace ShaderVariantAnalyzer.Editor
             if (!visited.Add(fullPath)) return;
             if (!File.Exists(fullPath)) return;
 
-            string content;
-            try { content = File.ReadAllText(fullPath); }
+            string[] lines;
+            try { lines = File.ReadAllLines(fullPath); }
             catch { return; }
 
             string dir = Path.GetDirectoryName(fullPath);
 
-            foreach (Match m in s_PragmaRx.Matches(content))
+            for (int i = 0; i < lines.Length; i++)
             {
-                string kind = m.Groups[1].Value;
-                bool isSf   = kind.StartsWith("shader_feature", StringComparison.OrdinalIgnoreCase);
-                bool isMc   = kind.StartsWith("multi_compile",  StringComparison.OrdinalIgnoreCase);
-                if (!isSf && !isMc) continue;
+                string trimmed   = lines[i].Trim();
+                int    lineNumber = i + 1;
 
-                string rest = m.Groups[2].Value;
-                int ci = rest.IndexOf("//", StringComparison.Ordinal);
-                if (ci >= 0) rest = rest.Substring(0, ci);
-
-                var tokens = rest.Trim().Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
-                if (tokens.Length == 0) continue;
-
-                if (isSf)
+                if (trimmed.StartsWith("#pragma ") || trimmed.StartsWith("#pragma\t"))
                 {
-                    foreach (var tok in tokens)
-                        if (tok != "_") info.SfKeywords.Add(tok);
-                }
-                else
-                {
-                    info.McSets.Add(tokens);
-                }
-            }
+                    var m = s_PragmaRx.Match(trimmed);
+                    if (!m.Success) continue;
 
-            foreach (Match m in s_IncludeRx.Matches(content))
-            {
-                string resolved = ResolveInclude(dir, m.Groups[1].Value);
-                ParseFile(resolved, info, visited);
+                    string kind = m.Groups[1].Value;
+                    bool isSf   = kind.StartsWith("shader_feature", StringComparison.OrdinalIgnoreCase);
+                    bool isMc   = kind.StartsWith("multi_compile",  StringComparison.OrdinalIgnoreCase);
+                    if (!isSf && !isMc) continue;
+
+                    string rest = m.Groups[2].Value;
+                    int ci = rest.IndexOf("//", StringComparison.Ordinal);
+                    if (ci >= 0) rest = rest.Substring(0, ci);
+
+                    var tokens = rest.Trim().Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+                    if (tokens.Length == 0) continue;
+
+                    if (isSf)
+                    {
+                        foreach (var tok in tokens)
+                            if (tok != "_" && !info.SfLocations.ContainsKey(tok))
+                                info.SfLocations[tok] = (fullPath, lineNumber);
+                    }
+                    else
+                    {
+                        info.McSets.Add((tokens, fullPath, lineNumber));
+                    }
+                }
+                else if (trimmed.StartsWith("#include"))
+                {
+                    var m = s_IncludeRx.Match(trimmed);
+                    if (!m.Success) continue;
+                    string resolved = ResolveInclude(dir, m.Groups[1].Value);
+                    ParseFile(resolved, info, visited);
+                }
             }
         }
 
@@ -177,6 +197,27 @@ namespace ShaderVariantAnalyzer.Editor
             }
 
             return candidate; // not found — ParseFile will skip gracefully via File.Exists guard
+        }
+
+        static string ToProjectRelativePath(string absolutePath)
+        {
+            if (string.IsNullOrEmpty(absolutePath)) return string.Empty;
+            string root = Path.GetDirectoryName(Application.dataPath);
+            if (absolutePath.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+                return absolutePath.Substring(root.Length).TrimStart(Path.DirectorySeparatorChar, '/').Replace('\\', '/');
+            return absolutePath;
+        }
+
+        static void OpenFileAtLine(string absolutePath, int line)
+        {
+            string relative = ToProjectRelativePath(absolutePath).Replace('\\', '/');
+            if (!string.IsNullOrEmpty(relative))
+            {
+                var asset = AssetDatabase.LoadMainAssetAtPath(relative);
+                if (asset != null && AssetDatabase.OpenAsset(asset, line))
+                    return;
+            }
+            UnityEditorInternal.InternalEditorUtility.OpenFileAtLineExternal(absolutePath, line);
         }
 
         // ── Menu ──────────────────────────────────────────────────────────────
@@ -279,6 +320,19 @@ namespace ShaderVariantAnalyzer.Editor
         void DrawKwDetail(KeywordData kd)
         {
             GUILayout.Space(4f);
+
+            if (!string.IsNullOrEmpty(kd.FilePath))
+            {
+                EditorGUILayout.BeginHorizontal();
+                GUILayout.Label("Defined in:", EditorStyles.boldLabel, GUILayout.Width(72f));
+                string display = ToProjectRelativePath(kd.FilePath) + ":" + kd.Line;
+                if (GUILayout.Button(display, EditorStyles.linkLabel))
+                    OpenFileAtLine(kd.FilePath, kd.Line);
+                GUILayout.FlexibleSpace();
+                EditorGUILayout.EndHorizontal();
+                GUILayout.Space(4f);
+            }
+
             GUILayout.Label($"Permutations containing \"{kd.Name}\":", EditorStyles.boldLabel);
 
             m_KwDetailScroll = EditorGUILayout.BeginScrollView(
@@ -313,11 +367,17 @@ namespace ShaderVariantAnalyzer.Editor
                 new[] { "Keyword / Set", "Options", "Type" }, colW,
                 ref m_McSortCol, ref m_McSortAsc, SortMcKeywords);
 
-            m_McScroll = EditorGUILayout.BeginScrollView(m_McScroll);
+            bool hasDetail = m_SelectedMcIdx >= 0 && m_SelectedMcIdx < m_McKeywords.Count;
+            float listH    = hasDetail
+                ? Mathf.Max(k_RowH * 4f, position.height * 0.55f - 100f)
+                : position.height - 100f;
+
+            m_McScroll = EditorGUILayout.BeginScrollView(m_McScroll, GUILayout.Height(listH));
             for (int i = 0; i < m_McKeywords.Count; i++)
             {
                 var mc = m_McKeywords[i];
-                DrawSelectableRow(i, -1, i % 2 == 1, null,
+                DrawSelectableRow(i, m_SelectedMcIdx, i % 2 == 1,
+                    () => m_SelectedMcIdx = m_SelectedMcIdx == i ? -1 : i,
                     () =>
                     {
                         GUILayout.Label(mc.Name,                   EditorStyles.label,     GUILayout.Width(colW[0]));
@@ -329,7 +389,9 @@ namespace ShaderVariantAnalyzer.Editor
                 GUILayout.Label("No multi_compile keywords found.", EditorStyles.centeredGreyMiniLabel);
             EditorGUILayout.EndScrollView();
 
-            if (m_McKeywords.Count > 0)
+            if (hasDetail)
+                DrawMcDetail(m_McKeywords[m_SelectedMcIdx]);
+            else if (m_McKeywords.Count > 0)
             {
                 int userSets   = m_McKeywords.Count(mc => !mc.IsBuiltin);
                 int builtinKws = m_McKeywords.Count(mc => mc.IsBuiltin);
@@ -337,6 +399,32 @@ namespace ShaderVariantAnalyzer.Editor
                     $"{userSets} user-defined pragma set(s)  ·  {builtinKws} built-in keyword(s)",
                     MessageType.Info);
             }
+        }
+
+        void DrawMcDetail(MultiCompileData mc)
+        {
+            GUILayout.Space(4f);
+
+            if (!mc.IsBuiltin && !string.IsNullOrEmpty(mc.FilePath))
+            {
+                EditorGUILayout.BeginHorizontal();
+                GUILayout.Label("Defined in:", EditorStyles.boldLabel, GUILayout.Width(72f));
+                string display = ToProjectRelativePath(mc.FilePath) + ":" + mc.Line;
+                if (GUILayout.Button(display, EditorStyles.linkLabel))
+                    OpenFileAtLine(mc.FilePath, mc.Line);
+                GUILayout.FlexibleSpace();
+                EditorGUILayout.EndHorizontal();
+            }
+            else
+            {
+                EditorGUILayout.HelpBox("Built-in keyword injected by Unity — no user source location.", MessageType.None);
+            }
+
+            GUILayout.Space(4f);
+            GUILayout.Label("Options in this set:", EditorStyles.boldLabel);
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            GUILayout.Label(string.Join("  |  ", mc.Options), EditorStyles.wordWrappedLabel);
+            EditorGUILayout.EndVertical();
         }
 
         // ── Tab 2: Permutations ───────────────────────────────────────────────
@@ -481,6 +569,7 @@ namespace ShaderVariantAnalyzer.Editor
             m_McKeywords.Clear();
             m_Permutations.Clear();
             m_SelectedKwIdx   = -1;
+            m_SelectedMcIdx   = -1;
             m_SelectedPermIdx = -1;
             m_IsAnalyzed      = false;
 
@@ -506,13 +595,13 @@ namespace ShaderVariantAnalyzer.Editor
 
                 // 3. Classify: MC wins if a keyword somehow appears in both pragmas.
                 var mcKeywordNames = new HashSet<string>(StringComparer.Ordinal);
-                foreach (var set in parsed.McSets)
-                    foreach (var opt in set)
+                foreach (var (tokens, _, _) in parsed.McSets)
+                    foreach (var opt in tokens)
                         if (opt != "_") mcKeywordNames.Add(opt);
 
                 var sfSet = new HashSet<string>(StringComparer.Ordinal);
                 foreach (var name in allKwNames)
-                    if (parsed.SfKeywords.Contains(name) && !mcKeywordNames.Contains(name))
+                    if (parsed.SfLocations.ContainsKey(name) && !mcKeywordNames.Contains(name))
                         sfSet.Add(name);
 
                 // 4. Build MC list: one row per unique pragma set from source.
@@ -523,7 +612,7 @@ namespace ShaderVariantAnalyzer.Editor
                 var seenSetKeys  = new HashSet<string>(StringComparer.Ordinal);
                 var accountedKws = new HashSet<string>(StringComparer.Ordinal);
 
-                foreach (var set in parsed.McSets)
+                foreach (var (set, setFile, setLine) in parsed.McSets)
                 {
                     var kwsInSpace = set.Where(o => o != "_" && allKwNames.Contains(o)).ToArray();
                     if (kwsInSpace.Length == 0) continue;
@@ -542,6 +631,8 @@ namespace ShaderVariantAnalyzer.Editor
                         Name      = string.Join(" | ", kwsInSpace),
                         Options   = relevantOptions,
                         IsBuiltin = false,
+                        FilePath  = setFile,
+                        Line      = setLine,
                     });
                     foreach (var kw in kwsInSpace)
                         accountedKws.Add(kw);
@@ -628,11 +719,14 @@ namespace ShaderVariantAnalyzer.Editor
                 {
                     kwPermCounts.TryGetValue(kw, out int pc);
                     kwMatCounts.TryGetValue(kw, out int mc);
+                    parsed.SfLocations.TryGetValue(kw, out var loc);
                     m_SfKeywords.Add(new KeywordData
                     {
                         Name             = kw,
                         PermutationCount = pc,
                         MaterialCount    = mc,
+                        FilePath         = loc.file,
+                        Line             = loc.line,
                     });
                 }
 

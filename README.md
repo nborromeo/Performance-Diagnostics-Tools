@@ -4,17 +4,41 @@ A collection of Unity Editor tools for diagnosing rendering and physics performa
 
 ---
 
-## Canvas Invalidation Tracker
+## Performance Diagnostics
 
 <img width="1197" height="819" alt="image" src="https://github.com/user-attachments/assets/f78e6cbc-2e3d-47e3-9b94-3aef1192b6fc" />
 
-Logs every call that adds an element to the Canvas layout or graphic rebuild queues, capturing the full call stack at the moment of invalidation. Use this tool to find out what code is causing unnecessary rebuilds every frame.
+<img width="1004" height="449" alt="image" src="https://github.com/user-attachments/assets/7492d859-e540-4a79-bd63-3d0fd154ca44" />
 
-**Open:** `Window > Analysis > Canvas Invalidation Tracker`
+A unified window that runs multiple diagnostic detectors simultaneously and collects all findings into a single, sortable list. Each detector can be toggled and configured independently from the toolbar.
 
-### How it works
+**Open:** `Window > Analysis > Performance Diagnostics`
 
-The tool patches methods at the native code level using a 14-byte JMP detour (Windows, macOS, and Linux Editor builds are supported). When any patched method is called, a hook captures the current stack trace and stores it.
+### Window layout
+
+The toolbar at the top contains a section for each active detector — with its category toggle, primary action controls, and a settings (⚙) popup. The total issue count is shown on the right. Below the toolbar a split view shows the issue list on the left and a details panel on the right.
+
+The issue list has the following columns:
+
+| Column | Meaning |
+|--------|---------|
+| **Type** | Which detector produced the entry, and the specific event type within that detector |
+| **Frame** | The frame number when the issue was captured |
+| **Object** | The name of the GameObject involved |
+| **Context** | Additional context — depends on the detector (e.g. Canvas name, break reason) |
+| **Count** | How many times the same issue was recorded (repeated events fold into one row) |
+
+Rows with a yellow background were captured in Play Mode; blue background rows were captured in Edit Mode. Click any row to open the details panel on the right.
+
+---
+
+### Canvas Invalidation detector
+
+Logs every call that adds an element to the Canvas layout or graphic rebuild queues, capturing the full call stack at the moment of invalidation. Use this to find what code is causing unnecessary rebuilds every frame.
+
+#### How it works
+
+The detector patches methods at the native code level using a 14-byte JMP detour (Windows, macOS, and Linux Editor builds are supported). When any patched method is called, a hook captures the current stack trace and stores it.
 
 **CanvasUpdateRegistry** — patched to catch managed layout and graphic rebuild registrations:
 - `RegisterCanvasElementForLayoutRebuild`
@@ -28,32 +52,20 @@ The tool patches methods at the native code level using a 14-byte JMP detour (Wi
 
 The **Traces ON / Traces OFF** indicator in the toolbar shows whether patching succeeded. If it shows OFF, entries are still captured but without call stacks.
 
-### Toolbar controls
+#### Toolbar controls
 
 | Control | Description |
 |---------|-------------|
-| **Clear** | Removes all captured entries |
+| **Canvas Invalidation toggle** | Show or hide Canvas Invalidation entries in the list |
+| **Clear** | Removes all captured Canvas Invalidation entries |
 | **Pause / Resume** | Temporarily stops capturing new entries |
-| **Layout / Graphic / CR** | Toggle filters for each invalidation type |
+| **Layout / Graphic / CR** | Toggle filters for each invalidation sub-type |
 | **Max** | Maximum number of entries to keep (oldest are trimmed) |
 | **Traces ON/OFF** | Green = patching active, Orange = patching inactive |
 
-### Reading the entry list
+#### Details panel
 
-The list uses sortable, resizable columns — click any column header to sort by that field. The columns are:
-
-- **Type badge** — `LAYOUT` (blue), `GRAPHIC` (green), or the CanvasRenderer method name (orange) for CR entries
-- **Dirty flags** — `V` (vertices) and/or `M` (material), for Graphic entries only
-- **Frame** — the frame number when the invalidation was registered
-- **Object** — the name of the invalidated GameObject
-- **Canvas** — the Canvas the object belongs to
-- **Count** — how many times the same invalidation was registered in the same frame (repeated invalidations are folded into one row with a count badge)
-
-Rows with a yellow background were captured during Play Mode; blue background rows were captured in Edit Mode.
-
-### Details panel
-
-Selecting an entry opens the details panel on the right:
+Selecting a Canvas Invalidation entry opens its details:
 
 - **Object** — full hierarchy path, with Ping and Select buttons to locate it in the scene
 - **Invalidation Details** — type, frame, time, mode, and dirty flags
@@ -61,7 +73,7 @@ Selecting an entry opens the details panel on the right:
 - **Components** — all components on the GameObject at capture time
 - **Call-site Stack Trace** — the full managed call stack from the moment the element was queued for rebuild. Stack frames that resolve to a source file are rendered as clickable links — clicking opens the file at the correct line in your script editor. When multiple unique call stacks produced the same invalidation (folded rows), use the **◀ ▶** arrows to page through each distinct trace. Use **Copy to Clipboard** to paste the current trace into an editor or bug report.
 
-### Common findings
+#### Common findings
 
 - A stack trace showing `Graphic.SetVerticesDirty` or `Graphic.SetMaterialDirty` called from an `Update` or animation callback every frame means a graphic is being dirtied continuously — the most common cause of constant rebuilds.
 - Layout invalidations triggered by `LayoutRebuilder.MarkLayoutForRebuild` on stable objects usually point to a script calling `SetActive`, changing a `RectTransform`, or modifying layout component properties unnecessarily.
@@ -69,19 +81,11 @@ Selecting an entry opens the details panel on the right:
 - **CR entries with a high Count** indicate a CanvasRenderer property (color, mesh, etc.) being set every frame from script. These bypass the managed rebuild path and won't appear as Layout or Graphic entries, making them easy to miss without this tool.
 - **Multiple unique traces on a single folded row** (shown via the ◀ ▶ pager) means the same object is being invalidated by more than one code path in the same frame — each trace is a separate fix target.
 
-### Requirements
-
-- Unity 6000.0 or later
-- `com.unity.ugui` 2.0.0 or later
-- Native method patching requires Windows x64, macOS x64/arm64, or Linux x64 Editor. On other platforms entries are captured without stack traces.
-
 ---
 
-## Static Rebuild Analyzer
+### Static Rebuild detector
 
-<img width="1004" height="449" alt="image" src="https://github.com/user-attachments/assets/7492d859-e540-4a79-bd63-3d0fd154ca44" />
-
-Detects static colliders — GameObjects with a `Collider` but no `Rigidbody` in their parent chain — that are causing physics broadphase rebuilds. Any of the following events on a static collider forces Unity to rebuild the broadphase every frame and tank physics performance:
+Detects static colliders — GameObjects with a `Collider` but no `Rigidbody` in their parent chain — that are causing physics broadphase rebuilds. Any of the following events on a static collider forces Unity to rebuild the broadphase and tank physics performance:
 
 - The GameObject moved, rotated, or scaled
 - The GameObject was activated or deactivated
@@ -89,32 +93,32 @@ Detects static colliders — GameObjects with a `Collider` but no `Rigidbody` in
 - A `Collider` component was enabled or disabled
 - The GameObject was created or destroyed
 
-**Open:** `Window > Analysis > Static Rebuild Analyzer`
+#### How it works
 
-### How it works
+The detector snapshots the world transform and collider state of every static collider GO in the scene, waits a configurable interval, then diffs the two snapshots. Only GOs that have a `Collider` somewhere in their subtree and no `Rigidbody` anywhere in their parent chain are considered.
 
-The tool snapshots the world transform and collider state of every static collider GO in the scene, waits a configurable interval, then diffs the two snapshots. Only GOs that have a `Collider` somewhere in their subtree and no `Rigidbody` anywhere in their parent chain are considered.
-
-### Controls
+#### Toolbar controls
 
 | Control | Description |
 |---------|-------------|
+| **Static Rebuild toggle** | Show or hide Static Rebuild entries in the list |
 | **Interval (s)** | Seconds between the two snapshots (0.05 – 5 s) |
 | **Continuous** | When enabled, keeps re-snapshotting and updating results live; **Start / Stop** replaces **Capture** |
 | **Limit Iterations** | Only available in Continuous mode. Caps the number of captures before auto-stopping |
 | **Max Iterations** | How many captures to run before stopping (1 – 1000) |
 | **Capture / Start** | Takes the first snapshot and begins waiting |
 | **Stop** | Stops a running continuous capture; shows current progress as `Stop (N / Max)` |
-| **Clear** | Removes all accumulated results |
+| **Clear** | Removes all accumulated Static Rebuild results |
 
-### Reading the results
+#### Reading the results
 
-Results are displayed as a table — one row per unique GameObject, persisting across captures. Counts accumulate: if the same GO is flagged 10 times across 10 continuous captures, each relevant column increments by 1 each time. Click any row to ping and select the object in the Hierarchy. Destroyed GameObjects appear in grey and cannot be selected.
+Results appear in the shared issue list — one row per unique event per GameObject, accumulating across captures. Click any row to ping and select the object in the Hierarchy. Destroyed GameObjects appear in grey and cannot be selected.
 
-| Column | Meaning |
-|--------|---------|
-| **Object** | GameObject name |
-| **Move** | How many captures detected a transform change (position, rotation, or scale) |
+The **Type** column shows the specific event that was detected:
+
+| Type value | Meaning |
+|-----------|---------|
+| **Move** | Transform change detected (position, rotation, or scale) |
 | **C+** | Collider component was added |
 | **C-** | Collider component was destroyed |
 | **C▲** | Collider component was enabled |
@@ -126,10 +130,13 @@ Results are displayed as a table — one row per unique GameObject, persisting a
 
 All column headers and cells show a tooltip with a plain-language description on hover.
 
+---
+
 ### Requirements
 
 - Unity 6000.0 or later
-- Must be used in **Play Mode** — transforms must be live
+- Canvas Invalidation detector: `com.unity.ugui` 2.0.0 or later; native patching requires Windows x64, macOS x64/arm64, or Linux x64 Editor (entries are still captured without stack traces on other platforms)
+- Static Rebuild detector: must be used in **Play Mode** — transforms must be live
 
 ---
 
@@ -174,3 +181,59 @@ Stencil push/pop entries represent `Mask` components. Each nested mask adds one 
 - Unity 6000.3 or later
 - The UI Profiler must be available (`com.unity.ugui` installed)
 - Overlays are drawn via `SceneView.duringSceneGui` and `Camera.onPostRender`; both Scene and Game view must be visible for overlays to appear in both
+
+---
+
+## Shader Variant Analyzer
+
+Analyzes a shader's keyword declarations and the materials in the project that reference it, giving you a clear picture of how many shader variants are being compiled and what is driving that count.
+
+**Open:** `Window > Analysis > Shader Variant Analyzer`
+
+### Workflow
+
+1. Open the tool window.
+2. Drag a shader asset into the **Shader** field in the toolbar (or use the object picker).
+3. Click **Analyze**. The tool parses the shader's source files (including resolved `#include` chains) and scans all materials in the project.
+4. Use the three tabs to explore the results.
+
+### Tab 0 — Shader Feature Keywords
+
+Lists every keyword declared with `#pragma shader_feature` (or `shader_feature_local`) found in the shader source. These keywords are per-material — only the keywords enabled on materials that actually reference this shader generate variants.
+
+| Column | Meaning |
+|--------|---------|
+| **Keyword** | The keyword name, as it appears in the pragma |
+| **Permutations** | How many compiled permutations include this keyword in the enabled state |
+| **Materials** | How many project materials have this keyword enabled |
+
+Clicking a keyword row expands a detail panel listing every material that has the keyword enabled, with ping/select buttons. The **Keyword** column also shows the source file and line number where the `#pragma` was found — clicking that link opens the file at that line in your script editor. Built-in keywords not found in parsed source are marked accordingly.
+
+Click any column header to sort by that field.
+
+### Tab 1 — Multi-Compile Keywords
+
+Lists every `#pragma multi_compile` (or `multi_compile_local`) set found in the shader source. Unlike `shader_feature`, `multi_compile` keywords are always compiled in full regardless of which materials exist, so a single set with many options has a large multiplying effect on total variant count.
+
+| Column | Meaning |
+|--------|---------|
+| **Keyword set** | All options in the pragma, e.g. `FOG_ON \| FOG_EXP2` |
+| **Options** | The number of options in the set (each option multiplies the total variant count) |
+
+Built-in keyword sets (those not found in parsed source files) are flagged separately. The source file and line number are shown for sets that come from project or package source. Click any column header to sort.
+
+### Tab 2 — Permutations
+
+Lists every unique permutation that exists across all materials in the project referencing this shader. Each row represents one unique combination of enabled `shader_feature` keywords found on at least one material.
+
+| Column | Meaning |
+|--------|---------|
+| **Active Shader Feature Keywords** | The set of enabled keywords that defines this permutation. Rows with no enabled keywords are labeled `(base — no shader_feature keywords)` |
+| **Materials** | How many project materials use exactly this permutation |
+
+Selecting a row expands a detail panel listing every material in that permutation, with ping/select buttons. This tab is the fastest way to identify permutations shared across many materials (good consolidation candidates) and permutations used by only one material (potential dead weight if the variant is rarely seen at runtime).
+
+### Requirements
+
+- Unity 6000.0 or later
+- The shader must be a project asset (not a built-in shader) for source parsing and material scanning to work
