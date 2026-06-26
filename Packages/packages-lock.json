@@ -91,11 +91,13 @@
       "dependencies": {},
       "url": "https://packages.unity.com"
     },
-    "com.unity.physics.static-rebuild-analyzer": {
-      "version": "file:com.unity.physics.static-rebuild-analyzer",
+    "com.unity.performance-diagnostics": {
+      "version": "file:com.unity.performance-diagnostics",
       "depth": 0,
       "source": "embedded",
-      "dependencies": {}
+      "dependencies": {
+        "com.unity.ugui": "2.0.0"
+      }
     },
     "com.unity.render-pipelines.core": {
       "version": "17.6.0",
@@ -190,14 +192,6 @@
       "depth": 0,
       "source": "embedded",
       "dependencies": {}
-    },
-    "com.unity.ui.canvas-invalidation-tracker": {
-      "version": "file:com.unity.ui.canvas-invalidation-tracker",
-      "depth": 0,
-      "source": "embedded",
-      "dependencies": {
-        "com.unity.ugui": "2.0.0"
-      }
     },
     "com.unity.visualscripting": {
       "version": "1.9.11",

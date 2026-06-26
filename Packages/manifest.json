@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "com.unity.performance-diagnostics": "file:com.unity.performance-diagnostics",
     "com.unity.ui.batchhighlighter": "file:com.unity.ui.batchhighlighter",
     "com.unity.ai.navigation": "2.0.12",
     "com.unity.collab-proxy": "2.12.4",
