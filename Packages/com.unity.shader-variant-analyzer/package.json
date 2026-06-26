@@ -1,0 +1,8 @@
+{
+  "name": "com.unity.shader-variant-analyzer",
+  "version": "0.1.0",
+  "displayName": "Shader Variant Analyzer",
+  "description": "Editor tool that analyses which shader keywords generate the most variants. Shows shader_feature permutations per material, multi_compile keyword costs, and lets you drill into which materials share each permutation.",
+  "unity": "6000.0",
+  "type": "tool"
+}

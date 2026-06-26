@@ -134,6 +134,12 @@
       "dependencies": {},
       "url": "https://packages.unity.com"
     },
+    "com.unity.shader-variant-analyzer": {
+      "version": "file:com.unity.shader-variant-analyzer",
+      "depth": 0,
+      "source": "embedded",
+      "dependencies": {}
+    },
     "com.unity.shadergraph": {
       "version": "17.6.0",
       "depth": 1,
