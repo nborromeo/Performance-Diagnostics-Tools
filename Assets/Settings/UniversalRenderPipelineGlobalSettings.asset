@@ -19,7 +19,7 @@ MonoBehaviour:
     m_StripRuntimeDebugShaders: 1
   m_URPShaderStrippingSetting:
     m_Version: 0
-    m_StripUnusedPostProcessingVariantsAndResources: 1
+    m_StripUnusedPostProcessingVariants: 0
     m_StripUnusedVariants: 1
     m_StripScreenCoordOverrideVariants: 1
   m_ShaderVariantLogLevel: 0
@@ -102,6 +102,8 @@ MonoBehaviour:
   references:
     version: 2
     RefIds:
+    - rid: -2
+      type: {class: , ns: , asm: }
     - rid: 6676907814285475842
       type: {class: PostProcessData/TextureResources, ns: UnityEngine.Rendering.Universal, asm: Unity.RenderPipelines.Universal.Runtime}
       data:
@@ -138,7 +140,17 @@ MonoBehaviour:
         - {fileID: 2800000, guid: fa042edbfc40fbd4bad0ab9d505b1223, type: 3}
         - {fileID: 2800000, guid: 896d9004736809c4fb5973b7c12eb8b9, type: 3}
         - {fileID: 2800000, guid: 179f794063d2a66478e6e726f84a65bc, type: 3}
-        filmGrainTex: []
+        filmGrainTex:
+        - {fileID: 2800000, guid: 654c582f7f8a5a14dbd7d119cbde215d, type: 3}
+        - {fileID: 2800000, guid: dd77ffd079630404e879388999033049, type: 3}
+        - {fileID: 2800000, guid: 1097e90e1306e26439701489f391a6c0, type: 3}
+        - {fileID: 2800000, guid: f0b67500f7fad3b4c9f2b13e8f41ba6e, type: 3}
+        - {fileID: 2800000, guid: 9930fb4528622b34687b00bbe6883de7, type: 3}
+        - {fileID: 2800000, guid: bd9e8c758250ef449a4b4bfaad7a2133, type: 3}
+        - {fileID: 2800000, guid: 510a2f57334933e4a8dbabe4c30204e4, type: 3}
+        - {fileID: 2800000, guid: b4db8180660810945bf8d55ab44352ad, type: 3}
+        - {fileID: 2800000, guid: fd2fd78b392986e42a12df2177d3b89c, type: 3}
+        - {fileID: 2800000, guid: 5cdee82a77d13994f83b8fdabed7c301, type: 3}
         smaaAreaTex: {fileID: 2800000, guid: d1f1048909d55cd4fa1126ab998f617e, type: 3}
         smaaSearchTex: {fileID: 2800000, guid: 51eee22c2a633ef4aada830eed57c3fd, type: 3}
         m_TexturesResourcesVersion: 0
@@ -307,7 +319,7 @@ MonoBehaviour:
       type: {class: URPShaderStrippingSetting, ns: UnityEngine.Rendering.Universal, asm: Unity.RenderPipelines.Universal.Runtime}
       data:
         m_Version: 0
-        m_StripUnusedPostProcessingVariantsAndResources: 1
+        m_StripUnusedPostProcessingVariants: 1
         m_StripUnusedVariants: 1
         m_StripScreenCoordOverrideVariants: 1
     - rid: 6852985685364965377
@@ -447,7 +459,7 @@ MonoBehaviour:
       data:
         m_Version: 0
         m_ExportShaderVariants: 1
-        m_ShaderVariantLogLevel: 0
+        m_ShaderVariantLogLevel: 2
         m_StripRuntimeDebugShaders: 1
     - rid: 6852985685364965393
       type: {class: ProbeVolumeRuntimeResources, ns: UnityEngine.Rendering, asm: Unity.RenderPipelines.Core.Runtime}
