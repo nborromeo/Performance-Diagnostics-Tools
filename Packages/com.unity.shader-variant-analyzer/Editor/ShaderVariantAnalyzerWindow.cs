@@ -58,8 +58,10 @@ namespace ShaderVariantAnalyzer.Editor
 
         sealed class LogShaderEntry
         {
+            public int    Order;
             public string ShaderName;
             public string PassName;
+            public string PassTag          = string.Empty; // raw name from Pass "..." line, used to match summary lines
             public int    SubShaderIndex;
             public string ShaderType;
             public string Pipeline;
@@ -71,6 +73,15 @@ namespace ShaderVariantAnalyzer.Editor
             public long   AfterBuiltinStripping;
             public long   AfterScriptableStripping;
             public float  ProcessTimeSec;
+            // ── Compilation summary (from "Pass X finished in..." lines) ──
+            public float  FinishedTimeSec;
+            public int    LocalCacheHits;
+            public float  LocalCacheCpuSec;
+            public int    RemoteCacheHits;
+            public float  RemoteCacheCpuSec;
+            public int    CompiledCount;
+            public float  CompiledCpuSec;
+            public int    SkippedCount;
         }
 
         sealed class LogTreeView : TreeView<int>
@@ -102,15 +113,21 @@ namespace ShaderVariantAnalyzer.Editor
                 {
                     int cmp = col switch
                     {
-                        0 => string.Compare(a.ShaderName, b.ShaderName, StringComparison.OrdinalIgnoreCase),
-                        1 => string.Compare(a.PassName,   b.PassName,   StringComparison.OrdinalIgnoreCase),
-                        2 => string.Compare(a.ShaderType, b.ShaderType, StringComparison.OrdinalIgnoreCase),
-                        3 => a.FullVariantSpace.CompareTo(b.FullVariantSpace),
-                        4 => a.AfterSettingsFilter.CompareTo(b.AfterSettingsFilter),
-                        5 => a.AfterBuiltinStripping.CompareTo(b.AfterBuiltinStripping),
-                        6 => a.AfterScriptableStripping.CompareTo(b.AfterScriptableStripping),
-                        7 => a.ProcessTimeSec.CompareTo(b.ProcessTimeSec),
-                        _ => 0
+                        0  => a.Order.CompareTo(b.Order),
+                        1  => string.Compare(a.ShaderName,  b.ShaderName,  StringComparison.OrdinalIgnoreCase),
+                        2  => string.Compare(a.PassName,    b.PassName,    StringComparison.OrdinalIgnoreCase),
+                        3  => string.Compare(a.ShaderType,  b.ShaderType,  StringComparison.OrdinalIgnoreCase),
+                        4  => string.Compare(a.GraphicsAPI, b.GraphicsAPI, StringComparison.OrdinalIgnoreCase),
+                        5  => a.FullVariantSpace.CompareTo(b.FullVariantSpace),
+                        6  => a.AfterSettingsFilter.CompareTo(b.AfterSettingsFilter),
+                        7  => a.AfterBuiltinStripping.CompareTo(b.AfterBuiltinStripping),
+                        8  => a.AfterScriptableStripping.CompareTo(b.AfterScriptableStripping),
+                        9  => a.ProcessTimeSec.CompareTo(b.ProcessTimeSec),
+                        10 => a.FinishedTimeSec.CompareTo(b.FinishedTimeSec),
+                        11 => a.LocalCacheHits.CompareTo(b.LocalCacheHits),
+                        12 => a.RemoteCacheHits.CompareTo(b.RemoteCacheHits),
+                        13 => a.CompiledCount.CompareTo(b.CompiledCount),
+                        _  => 0
                     };
                     return asc ? cmp : -cmp;
                 });
@@ -181,15 +198,21 @@ namespace ShaderVariantAnalyzer.Editor
                     CenterRectUsingSingleLineHeight(ref rect);
                     string text = args.GetColumn(i) switch
                     {
-                        0 => e.ShaderName,
-                        1 => e.PassName,
-                        2 => e.ShaderType,
-                        3 => e.FullVariantSpace.ToString("N", s_DotGroupFmt),
-                        4 => e.AfterSettingsFilter.ToString("N", s_DotGroupFmt),
-                        5 => e.AfterBuiltinStripping.ToString("N", s_DotGroupFmt),
-                        6 => e.AfterScriptableStripping.ToString("N", s_DotGroupFmt),
-                        7 => e.ProcessTimeSec > 0f ? e.ProcessTimeSec.ToString("F3") : "—",
-                        _ => string.Empty
+                        0  => e.Order.ToString(),
+                        1  => e.ShaderName,
+                        2  => e.PassName,
+                        3  => e.ShaderType,
+                        4  => e.GraphicsAPI,
+                        5  => e.FullVariantSpace.ToString("N", s_DotGroupFmt),
+                        6  => e.AfterSettingsFilter.ToString("N", s_DotGroupFmt),
+                        7  => e.AfterBuiltinStripping.ToString("N", s_DotGroupFmt),
+                        8  => e.AfterScriptableStripping.ToString("N", s_DotGroupFmt),
+                        9  => e.ProcessTimeSec > 0f ? e.ProcessTimeSec.ToString("F3") : "—",
+                        10 => e.FinishedTimeSec.ToString("F3"),
+                        11 => $"{e.LocalCacheHits} ({e.LocalCacheCpuSec:F2}s)",
+                        12 => $"{e.RemoteCacheHits} ({e.RemoteCacheCpuSec:F2}s)",
+                        13 => $"{e.CompiledCount} ({e.CompiledCpuSec:F2}s)",
+                        _  => string.Empty
                     };
                     EditorGUI.LabelField(rect, text);
                 }
@@ -199,18 +222,24 @@ namespace ShaderVariantAnalyzer.Editor
             {
                 var state = new MultiColumnHeaderState(new[]
                 {
+                    new MultiColumnHeaderState.Column { headerContent = new GUIContent("#"),               width = 44,  minWidth = 30,  autoResize = false, canSort = true, allowToggleVisibility = false },
                     new MultiColumnHeaderState.Column { headerContent = new GUIContent("Shader"),          width = 200, minWidth = 80,  autoResize = true,  canSort = true, allowToggleVisibility = false },
                     new MultiColumnHeaderState.Column { headerContent = new GUIContent("Pass"),             width = 90,  minWidth = 50,  autoResize = false, canSort = true },
-                    new MultiColumnHeaderState.Column { headerContent = new GUIContent("Stage"),            width = 70,  minWidth = 50,  autoResize = false, canSort = true },
+                    new MultiColumnHeaderState.Column { headerContent = new GUIContent("Stage"),            width = 55,  minWidth = 40,  autoResize = false, canSort = true },
+                    new MultiColumnHeaderState.Column { headerContent = new GUIContent("API"),              width = 50,  minWidth = 40,  autoResize = false, canSort = true },
                     new MultiColumnHeaderState.Column { headerContent = new GUIContent("Full Space"),       width = 80,  minWidth = 50,  autoResize = false, canSort = true },
                     new MultiColumnHeaderState.Column { headerContent = new GUIContent("After Settings"),   width = 90,  minWidth = 50,  autoResize = false, canSort = true },
                     new MultiColumnHeaderState.Column { headerContent = new GUIContent("After Built-in"),   width = 90,  minWidth = 50,  autoResize = false, canSort = true },
                     new MultiColumnHeaderState.Column { headerContent = new GUIContent("After Scriptable"), width = 100, minWidth = 50,  autoResize = false, canSort = true },
-                    new MultiColumnHeaderState.Column { headerContent = new GUIContent("Proc. Time (s)"),   width = 90,  minWidth = 60,  autoResize = false, canSort = true },
+                    new MultiColumnHeaderState.Column { headerContent = new GUIContent("Strip Time (s)",  "Time spent stripping variants (Processed in X seconds)"),                                          width = 75,  minWidth = 50,  autoResize = false, canSort = true },
+                    new MultiColumnHeaderState.Column { headerContent = new GUIContent("Compile Time (s)", "Total wall-clock time to compile this pass (finished in X seconds)"),                               width = 75,  minWidth = 50,  autoResize = false, canSort = true },
+                    new MultiColumnHeaderState.Column { headerContent = new GUIContent("Local Cache",       "Variants served from local cache: hit count and CPU time spent on cache lookups"),                  width = 90,  minWidth = 50,  autoResize = false, canSort = true },
+                    new MultiColumnHeaderState.Column { headerContent = new GUIContent("Remote Cache",      "Variants served from remote cache: hit count and CPU time spent on remote cache lookups"),          width = 90,  minWidth = 50,  autoResize = false, canSort = true },
+                    new MultiColumnHeaderState.Column { headerContent = new GUIContent("Compiled (CPU)",    "Variants compiled from source: count and cumulative CPU time across all compiler threads (can exceed wall time when parallel compilation is active)"), width = 110, minWidth = 60,  autoResize = false, canSort = true },
                 });
-                // Default: Full Space descending
-                state.sortedColumnIndex          = 3;
-                state.columns[3].sortedAscending = false;
+                // Default: Full Space descending (col 5)
+                state.sortedColumnIndex          = 5;
+                state.columns[5].sortedAscending = false;
                 return state;
             }
         }
@@ -681,10 +710,6 @@ namespace ShaderVariantAnalyzer.Editor
 
         // Only the two complex matches still use Regex. Hot-path line routing uses IndexOf.
         // Captures the shader name from:  Compiling shader "Universal Render Pipeline/Unlit"
-        static readonly Regex s_LogCompilingShaderRx = new Regex(
-            @"^Compiling shader ""(.+)""",
-            RegexOptions.Compiled);
-
         // Number format that uses "." as the thousands separator (e.g. 1.024.576).
         static readonly System.Globalization.NumberFormatInfo s_DotGroupFmt =
             new System.Globalization.NumberFormatInfo
@@ -696,13 +721,36 @@ namespace ShaderVariantAnalyzer.Editor
 
         // Group 1 = shader+pass concatenated, Group 2 = light-mode tag (not the pass name),
         // Group 3 = SubShader, Group 4 = ShaderType, Group 5 = Pipeline,
-        // Group 6/7 = compiled/total, Group 8 = time ms
+        // Group 6/7 = compiled/total, Group 8 = time ms.
+        // No ^ anchor — matched at an arbitrary offset via Match(line, idx).
         static readonly Regex s_LogShaderLineRx = new Regex(
-            @"^Shader=(.+?)\s+\((\w[\w\s]*?)\)\s+\(SubShader:\s*(\d+)\)\s+\(ShaderType:\s*(\w+)\)\s+Pipeline=(\S*)\s+Total=(\d+)/(\d+)\([^)]+\)\s+Time=([\d.]+)ms",
+            @"Shader=(.+?)\s+\((\w[\w\s]*?)\)\s+\(SubShader:\s*(\d+)\)\s+\(ShaderType:\s*(\w+)\)\s+Pipeline=(\S*)\s+Total=(\d+)/(\d+)\([^)]+\)\s+Time=([\d.]+)ms",
+            RegexOptions.Compiled);
+
+        // Parses "Pass NAME (STAGE, API) finished in X.XX seconds. Local cache hits N (Xs CPU time), ..."
+        // Group 1=PassName, 2=StageAbbrev(vp/fp), 3=API, 4=FinishedSec,
+        // 5=LocalHits, 6=LocalCpuSec, 7=RemoteHits, 8=RemoteCpuSec,
+        // 9=CompiledCount, 10=CompiledCpuSec, 11=SkippedCount
+        static readonly Regex s_LogFinishedRx = new Regex(
+            @"Pass\s+(.*?)\s*\((\w+),\s*(\w+)\)\s+finished in ([\d.]+) seconds\.\s+" +
+            @"Local cache hits (\d+) \(([\d.]+)s CPU time\), " +
+            @"remote cache hits (\d+) \(([\d.]+)s CPU time\), " +
+            @"compiled (\d+) variants \(([\d.]+)s CPU time\), " +
+            @"skipped (\d+) variants",
             RegexOptions.Compiled);
 
         // Strips every non-digit character so locale separators (. , space) don't break parsing.
         static readonly Regex s_NonDigitRx = new Regex(@"[^\d]", RegexOptions.Compiled);
+
+        static string StageAbbrevToShaderType(string abbrev) => abbrev switch
+        {
+            "vp" => "Vertex",
+            "fp" => "Fragment",
+            "gp" => "Geometry",
+            "hp" => "Hull",
+            "dp" => "Domain",
+            _    => abbrev,
+        };
 
         static long ParseVariantCount(string str)
         {
@@ -814,76 +862,95 @@ namespace ShaderVariantAnalyzer.Editor
             }
 
             LogShaderEntry current          = null;
-            int            detailsExpected   = 0;
+            bool           currentCommitted  = false; // true once current has been added to m_LogEntries
             string         currentShaderName = string.Empty;
+            string         currentPassName   = string.Empty;
 
-            const string k_StepToken      = "[Step ";
-            const string k_ProcessedToken = "Processed in ";
-            const string k_SecondsToken   = " seconds";
+            // Token lengths (pre-computed to avoid magic numbers at each call site)
+            const int k_CompilingShaderLen        = 18; // "Compiling shader \""
+            const int k_PassQuoteLen              = 6;  // "Pass \""
+            const int k_FullVariantSpaceLen        = 19; // "Full variant space:"
+            const int k_AfterSettingsLen           = 25; // "After settings filtering:"
+            const int k_AfterBuiltinLen            = 25; // "After built-in stripping:"
+            const int k_AfterScriptableLen         = 27; // "After scriptable stripping:"
+            const int k_ProcessedInLen             = 13; // "Processed in "
 
             foreach (string raw in lines)
             {
-                // ── Fast hot-path routing via IndexOf (no regex on most lines) ──
+                // Search for each known token anywhere in the line so any log prefix
+                // (timestamps, thread IDs, [Step N/M] brackets, CI decorations, etc.)
+                // is transparently ignored.
+                int idx;
 
-                int stepIdx = raw.IndexOf(k_StepToken, StringComparison.Ordinal);
-                if (stepIdx < 0)
+                // ── "Compiling shader" ───────────────────────────────────────────
+                idx = raw.IndexOf("Compiling shader \"", StringComparison.Ordinal);
+                if (idx >= 0)
                 {
-                    // "Compiling shader" can appear without any [Step] prefix.
-                    int csIdx = raw.IndexOf("Compiling shader \"", StringComparison.Ordinal);
-                    if (csIdx >= 0)
-                    {
-                        int nameStart = csIdx + 18; // len("Compiling shader \"")
-                        int nameEnd   = raw.IndexOf('"', nameStart);
-                        if (nameEnd > nameStart)
-                            currentShaderName = raw.Substring(nameStart, nameEnd - nameStart);
-                    }
+                    int nameStart = idx + k_CompilingShaderLen;
+                    int nameEnd   = raw.IndexOf('"', nameStart);
+                    if (nameEnd > nameStart)
+                        currentShaderName = raw.Substring(nameStart, nameEnd - nameStart);
+                    currentPassName = string.Empty;
                     continue;
                 }
 
-                // Locate the closing ']' of "[Step N/M]" and skip trailing whitespace.
-                int closeBracket = raw.IndexOf(']', stepIdx + k_StepToken.Length);
-                if (closeBracket < 0) continue;
-
-                int contentStart = closeBracket + 1;
-                while (contentStart < raw.Length && (raw[contentStart] == ' ' || raw[contentStart] == '\t'))
-                    contentStart++;
-                if (contentStart >= raw.Length) continue;
-
-                string content = raw.Substring(contentStart);
-                char   first   = content[0];
-
-                // ── Dispatch by first character ─────────────────────────────────
-
-                if (first == 'C' && content.StartsWith("Compiling shader \"", StringComparison.Ordinal))
+                // ── Pass "Name" (vp/fp) — appears just before its Shader= line ──
+                // Tracking this is more reliable than currentShaderName for splitting
+                // the concatenated shader+pass field, because the Pass line is always
+                // adjacent to its Shader= line even in interleaved multi-thread logs.
+                idx = raw.IndexOf("Pass \"", StringComparison.Ordinal);
+                if (idx >= 0)
                 {
-                    var m = s_LogCompilingShaderRx.Match(content);
-                    if (m.Success) currentShaderName = m.Groups[1].Value;
+                    int nameStart = idx + k_PassQuoteLen;
+                    int nameEnd   = raw.IndexOf('"', nameStart);
+                    if (nameEnd >= nameStart) // nameEnd == nameStart → empty pass name ""
+                        currentPassName = raw.Substring(nameStart, nameEnd - nameStart);
                     continue;
                 }
 
-                if (first == 'S' && content.StartsWith("Shader=", StringComparison.Ordinal))
+                // ── "Shader=" (main compilation line) ───────────────────────────
+                idx = raw.IndexOf("Shader=", StringComparison.Ordinal);
+                if (idx >= 0)
                 {
-                    var m = s_LogShaderLineRx.Match(content);
+                    var m = s_LogShaderLineRx.Match(raw, idx);
                     if (m.Success)
                     {
                         string full = m.Groups[1].Value.Trim();
                         string shaderName, passName;
-                        if (!string.IsNullOrEmpty(currentShaderName)
+
+                        // Priority 1: use the Pass "..." name seen just before this line.
+                        // EndsWith is reliable because the Pass line is always adjacent to
+                        // its Shader= line even when other threads interleave between them.
+                        if (!string.IsNullOrEmpty(currentPassName)
+                            && full.EndsWith(currentPassName, StringComparison.Ordinal))
+                        {
+                            shaderName = full.Substring(0, full.Length - currentPassName.Length);
+                            passName   = currentPassName;
+                        }
+                        // Priority 2: peel the shader name from the front (works for unnamed
+                        // passes like "Pass 0" when currentPassName is empty).
+                        else if (!string.IsNullOrEmpty(currentShaderName)
                             && full.StartsWith(currentShaderName, StringComparison.Ordinal))
                         {
                             shaderName = currentShaderName;
                             passName   = full.Substring(currentShaderName.Length);
                         }
+                        // Priority 3: last resort — the light-mode tag from the regex.
                         else
                         {
                             shaderName = full;
                             passName   = m.Groups[2].Value;
                         }
 
+                        // Don't add yet — we only commit this entry when the first
+                        // "Full variant space:" line arrives. Progress-report duplicates
+                        // (from parallel compilation) never have detail lines and will
+                        // be silently discarded.
                         current = new LogShaderEntry
                         {
                             ShaderName       = shaderName,
                             PassName         = passName,
+                            PassTag          = currentPassName,
                             SubShaderIndex   = int.Parse(m.Groups[3].Value),
                             ShaderType       = m.Groups[4].Value,
                             Pipeline         = m.Groups[5].Value,
@@ -891,51 +958,102 @@ namespace ShaderVariantAnalyzer.Editor
                             TotalVariants    = int.Parse(m.Groups[7].Value),
                             GraphicsAPI      = string.Empty,
                         };
-                        m_LogEntries.Add(current);
-                        detailsExpected = 5;
+                        currentCommitted = false;
                     }
                     continue;
                 }
 
-                // Detail lines (Target / Full / After …)
-                if (current == null || detailsExpected == 0) continue;
-
-                switch (first)
+                // ── "Pass NAME (STAGE, API) finished in..." summary line ────────
+                idx = raw.IndexOf("Local cache hits ", StringComparison.Ordinal);
+                if (idx >= 0)
                 {
-                    case 'T':
-                        if (content.StartsWith("Target graphics API:", StringComparison.Ordinal))
-                            current.GraphicsAPI = content.Substring(20).Trim();
-                        break;
-                    case 'F':
-                        if (content.StartsWith("Full variant space:", StringComparison.Ordinal))
-                            current.FullVariantSpace = ParseVariantCount(content.Substring(19));
-                        break;
-                    case 'A':
-                        if (content.StartsWith("After settings filtering:", StringComparison.Ordinal))
-                            current.AfterSettingsFilter = ParseVariantCount(content.Substring(25));
-                        else if (content.StartsWith("After built-in stripping:", StringComparison.Ordinal))
-                            current.AfterBuiltinStripping = ParseVariantCount(content.Substring(25));
-                        else if (content.StartsWith("After scriptable stripping:", StringComparison.Ordinal))
+                    var mf = s_LogFinishedRx.Match(raw);
+                    if (mf.Success)
+                    {
+                        string finPassName = mf.Groups[1].Value.Trim();
+                        string shaderType  = StageAbbrevToShaderType(mf.Groups[2].Value);
+                        string api         = mf.Groups[3].Value;
+                        float.TryParse(mf.Groups[4].Value,  System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float finSec);
+                        int.TryParse  (mf.Groups[5].Value,  out int   localHits);
+                        float.TryParse(mf.Groups[6].Value,  System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float localCpu);
+                        int.TryParse  (mf.Groups[7].Value,  out int   remoteHits);
+                        float.TryParse(mf.Groups[8].Value,  System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float remoteCpu);
+                        int.TryParse  (mf.Groups[9].Value,  out int   compiledCount);
+                        float.TryParse(mf.Groups[10].Value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float compiledCpu);
+                        int.TryParse  (mf.Groups[11].Value, out int   skippedCount);
+
+                        // Match to the most-recent committed entry with same pass+stage+api.
+                        // PassTag stores the raw name from the Pass "..." line — same token
+                        // used in the summary line — so empty=empty is handled correctly.
+                        for (int i = m_LogEntries.Count - 1; i >= 0; i--)
                         {
-                            current.AfterScriptableStripping = ParseVariantCount(content.Substring(27));
-                            detailsExpected = 0;
+                            var e = m_LogEntries[i];
+                            bool passMatch = string.IsNullOrEmpty(finPassName)
+                                ? string.IsNullOrEmpty(e.PassTag)
+                                : e.PassTag == finPassName;
+                            if (passMatch
+                                && e.ShaderType == shaderType
+                                && (string.IsNullOrEmpty(currentShaderName) || e.ShaderName == currentShaderName))
+                            {
+                                e.FinishedTimeSec   = finSec;
+                                e.LocalCacheHits    = localHits;
+                                e.LocalCacheCpuSec  = localCpu;
+                                e.RemoteCacheHits   = remoteHits;
+                                e.RemoteCacheCpuSec = remoteCpu;
+                                e.CompiledCount     = compiledCount;
+                                e.CompiledCpuSec    = compiledCpu;
+                                e.SkippedCount      = skippedCount;
+                                break;
+                            }
                         }
-                        break;
-                    case 'P':
-                        if (current.ProcessTimeSec == 0f
-                            && content.StartsWith(k_ProcessedToken, StringComparison.Ordinal))
-                        {
-                            int numEnd = content.IndexOf(k_SecondsToken, k_ProcessedToken.Length,
-                                                         StringComparison.Ordinal);
-                            if (numEnd > k_ProcessedToken.Length)
-                                float.TryParse(
-                                    content.Substring(k_ProcessedToken.Length,
-                                                      numEnd - k_ProcessedToken.Length),
-                                    System.Globalization.NumberStyles.Float,
-                                    System.Globalization.CultureInfo.InvariantCulture,
-                                    out current.ProcessTimeSec);
-                        }
-                        break;
+                    }
+                    continue;
+                }
+
+                // ── Detail lines — only relevant when inside a shader block ─────
+                if (current == null) continue;
+
+                // "Target graphics API:" appears before "Full variant space:" so it is
+                // processed while the entry is still uncommitted — that is fine because
+                // the entry object is mutated in place and the reference will be shared
+                // once it is committed.
+                idx = raw.IndexOf("Target graphics API:", StringComparison.Ordinal);
+                if (idx >= 0) { current.GraphicsAPI = raw.Substring(idx + 20).Trim(); continue; }
+
+                idx = raw.IndexOf("Full variant space:", StringComparison.Ordinal);
+                if (idx >= 0)
+                {
+                    // First detail line seen — this entry is real, not a progress duplicate.
+                    if (!currentCommitted)
+                    {
+                        current.Order = m_LogEntries.Count + 1;
+                        m_LogEntries.Add(current);
+                        currentCommitted = true;
+                    }
+                    current.FullVariantSpace = ParseVariantCount(raw.Substring(idx + k_FullVariantSpaceLen));
+                    continue;
+                }
+
+                idx = raw.IndexOf("After settings filtering:", StringComparison.Ordinal);
+                if (idx >= 0) { current.AfterSettingsFilter = ParseVariantCount(raw.Substring(idx + k_AfterSettingsLen)); continue; }
+
+                idx = raw.IndexOf("After built-in stripping:", StringComparison.Ordinal);
+                if (idx >= 0) { current.AfterBuiltinStripping = ParseVariantCount(raw.Substring(idx + k_AfterBuiltinLen)); continue; }
+
+                idx = raw.IndexOf("After scriptable stripping:", StringComparison.Ordinal);
+                if (idx >= 0) { current.AfterScriptableStripping = ParseVariantCount(raw.Substring(idx + k_AfterScriptableLen)); continue; }
+
+                idx = raw.IndexOf("Processed in ", StringComparison.Ordinal);
+                if (idx >= 0 && current.ProcessTimeSec == 0f)
+                {
+                    int numStart = idx + k_ProcessedInLen;
+                    int numEnd   = raw.IndexOf(" seconds", numStart, StringComparison.Ordinal);
+                    if (numEnd > numStart)
+                        float.TryParse(raw.Substring(numStart, numEnd - numStart),
+                            System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture,
+                            out current.ProcessTimeSec);
+                    continue;
                 }
             }
 
