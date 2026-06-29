@@ -233,7 +233,48 @@ Lists every unique permutation that exists across all materials in the project r
 
 Selecting a row expands a detail panel listing every material in that permutation, with ping/select buttons. This tab is the fastest way to identify permutations shared across many materials (good consolidation candidates) and permutations used by only one material (potential dead weight if the variant is rarely seen at runtime).
 
+### Tab 3 — Editor Log
+
+Parses a Unity Editor log file produced during a build or a shader compilation step and shows the stripping and compilation data for every shader pass in a sortable table. This lets you find which shaders took the longest to compile, how many variants survived each stripping stage, and how much work was served from cache versus compiled from source.
+
+#### Workflow
+
+1. Click **Browse…** to pick a `.log` or `.txt` Editor log file, or paste its path directly into the text field.
+2. Click **Parse**. The tool scans the file and extracts one row per shader pass compilation block.
+3. Use the **Filter** field to narrow the list by shader name or pass name (case-insensitive substring match). Click **✕** to clear.
+4. Click any column header to sort. Click a row to ping and select the corresponding shader asset in the Project window.
+
+The parser ignores any log-line prefix (timestamps, thread IDs, `[Step N/M]` CI brackets, etc.), so logs produced by the Editor, CI pipelines, or third-party log decorators are all handled correctly.
+
+#### Columns
+
+| Column | Meaning |
+|--------|---------|
+| **#** | Parse order — reflects the order in which the blocks appeared in the log |
+| **Shader** | Shader name as reported by Unity (e.g. `Universal Render Pipeline/Unlit`) |
+| **Pass** | Pass name from the `Pass "…"` declaration; empty for unnamed passes |
+| **Stage** | Shader stage: Vertex, Fragment, Geometry, Hull, or Domain |
+| **API** | Graphics API this compilation targeted (e.g. `Metal`, `Vulkan`, `d3d11`) |
+| **Full Space** | Total theoretical variant count before any stripping |
+| **After Settings** | Variants remaining after Unity's graphics settings filter |
+| **After Built-in** | Variants remaining after Unity's built-in stripping pass |
+| **After Scriptable** | Variants remaining after all `IShaderVariantStripper` scriptable strippers |
+| **Strip Time (s)** | Wall-clock seconds reported for the stripping phase (`Processed in X seconds`) |
+| **Compile Time (s)** | Wall-clock seconds for the full compilation of this pass (`finished in X seconds`) |
+| **Local Cache** | Local cache hits and the CPU time spent on those lookups |
+| **Remote Cache** | Remote cache hits and the CPU time spent on those lookups |
+| **Compiled (CPU)** | Variants compiled from source and the cumulative CPU time across all compiler threads (can exceed wall time when parallel compilation is active) |
+
+The table defaults to **Full Space descending** so the heaviest shaders appear first.
+
+#### Reading the results
+
+- A large gap between **Full Space** and **After Scriptable** means your strippers are doing useful work. If the gap is small, consider writing or enabling a `IShaderVariantStripper`.
+- High **Compiled (CPU)** time with low cache hits means variants are being compiled from scratch on every build. Warming the local or remote cache (incremental builds, build cache server) will speed up subsequent builds.
+- The **Strip Time** and **Compile Time** columns together show whether the bottleneck is in the stripping phase or the actual GPU compiler invocations.
+
 ### Requirements
 
 - Unity 6000.0 or later
 - The shader must be a project asset (not a built-in shader) for source parsing and material scanning to work
+- Editor Log tab: any Unity Editor log file that contains shader compilation output; no Unity version restriction
