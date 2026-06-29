@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using UnityEditor;
+using UnityEditor.IMGUI.Controls;
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -53,6 +54,167 @@ namespace ShaderVariantAnalyzer.Editor
             public HashSet<string> SfKeywords => new HashSet<string>(SfLocations.Keys, StringComparer.Ordinal);
         }
 
+        // ── Data models ────────────────────────────────────────────────────────
+
+        sealed class LogShaderEntry
+        {
+            public string ShaderName;
+            public string PassName;
+            public int    SubShaderIndex;
+            public string ShaderType;
+            public string Pipeline;
+            public int    CompiledVariants;
+            public int    TotalVariants;
+            public string GraphicsAPI;
+            public long   FullVariantSpace;
+            public long   AfterSettingsFilter;
+            public long   AfterBuiltinStripping;
+            public long   AfterScriptableStripping;
+            public float  ProcessTimeSec;
+        }
+
+        sealed class LogTreeView : TreeView<int>
+        {
+            List<LogShaderEntry> m_Source = new List<LogShaderEntry>();
+
+            public LogTreeView(TreeViewState<int> tvState, MultiColumnHeader header) : base(tvState, header)
+            {
+                rowHeight                     = 18f;
+                showAlternatingRowBackgrounds = true;
+                showBorder                    = true;
+                header.sortingChanged         += _ => { SortSource(); Reload(); };
+                Reload();
+            }
+
+            public void SetSource(List<LogShaderEntry> entries)
+            {
+                m_Source = entries;
+                SortSource();
+                Reload();
+            }
+
+            void SortSource()
+            {
+                int col = multiColumnHeader.sortedColumnIndex;
+                if (col < 0 || m_Source.Count == 0) return;
+                bool asc = multiColumnHeader.IsSortedAscending(col);
+                m_Source.Sort((a, b) =>
+                {
+                    int cmp = col switch
+                    {
+                        0 => string.Compare(a.ShaderName, b.ShaderName, StringComparison.OrdinalIgnoreCase),
+                        1 => string.Compare(a.PassName,   b.PassName,   StringComparison.OrdinalIgnoreCase),
+                        2 => string.Compare(a.ShaderType, b.ShaderType, StringComparison.OrdinalIgnoreCase),
+                        3 => a.FullVariantSpace.CompareTo(b.FullVariantSpace),
+                        4 => a.AfterSettingsFilter.CompareTo(b.AfterSettingsFilter),
+                        5 => a.AfterBuiltinStripping.CompareTo(b.AfterBuiltinStripping),
+                        6 => a.AfterScriptableStripping.CompareTo(b.AfterScriptableStripping),
+                        7 => a.ProcessTimeSec.CompareTo(b.ProcessTimeSec),
+                        _ => 0
+                    };
+                    return asc ? cmp : -cmp;
+                });
+            }
+
+            protected override TreeViewItem<int> BuildRoot()
+            {
+                var root  = new TreeViewItem<int>(-1, -1);
+                var items = new List<TreeViewItem<int>>(m_Source.Count);
+                for (int i = 0; i < m_Source.Count; i++)
+                    items.Add(new TreeViewItem<int>(i, 0, m_Source[i].ShaderName));
+                SetupParentsAndChildrenFromDepths(root, items);
+                return root;
+            }
+
+            protected override void SingleClickedItem(int id)
+            {
+                if (id < 0 || id >= m_Source.Count) return;
+                string shaderName = m_Source[id].ShaderName;
+
+                // 1. Runtime lookup — fast, works for .shader files already compiled.
+                var shader = Shader.Find(shaderName);
+                if (shader != null) { PingAndSelect(shader); return; }
+
+                // The last segment of "Shader Graphs/MyGraph" gives the asset filename.
+                string hint = shaderName.Contains('/')
+                    ? shaderName.Substring(shaderName.LastIndexOf('/') + 1)
+                    : shaderName;
+
+                // 2. Load every asset matching the filename hint and verify by shader name.
+                //    Using no type filter casts the widest net (covers .shader, .shadergraph,
+                //    and any other packaging).
+                foreach (string guid in AssetDatabase.FindAssets(hint))
+                {
+                    string path = AssetDatabase.GUIDToAssetPath(guid);
+
+                    // Try loading as a compiled Shader asset first.
+                    var asShader = AssetDatabase.LoadAssetAtPath<Shader>(path);
+                    if (asShader != null && asShader.name == shaderName)
+                    {
+                        PingAndSelect(asShader);
+                        return;
+                    }
+
+                    // For .shadergraph files the main asset name is just the file's basename,
+                    // not the full "Shader Graphs/..." path, so skip the name check and trust
+                    // that the filename hint is specific enough.
+                    if (path.EndsWith(".shadergraph", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var main = AssetDatabase.LoadMainAssetAtPath(path);
+                        if (main != null) { PingAndSelect(main); return; }
+                    }
+                }
+            }
+
+            static void PingAndSelect(UnityEngine.Object obj)
+            {
+                Selection.activeObject = obj;
+                EditorGUIUtility.PingObject(obj);
+            }
+
+            protected override void RowGUI(RowGUIArgs args)
+            {
+                var e = m_Source[args.item.id];
+                for (int i = 0; i < args.GetNumVisibleColumns(); i++)
+                {
+                    var rect = args.GetCellRect(i);
+                    CenterRectUsingSingleLineHeight(ref rect);
+                    string text = args.GetColumn(i) switch
+                    {
+                        0 => e.ShaderName,
+                        1 => e.PassName,
+                        2 => e.ShaderType,
+                        3 => e.FullVariantSpace.ToString("N", s_DotGroupFmt),
+                        4 => e.AfterSettingsFilter.ToString("N", s_DotGroupFmt),
+                        5 => e.AfterBuiltinStripping.ToString("N", s_DotGroupFmt),
+                        6 => e.AfterScriptableStripping.ToString("N", s_DotGroupFmt),
+                        7 => e.ProcessTimeSec > 0f ? e.ProcessTimeSec.ToString("F3") : "—",
+                        _ => string.Empty
+                    };
+                    EditorGUI.LabelField(rect, text);
+                }
+            }
+
+            public static MultiColumnHeaderState CreateDefaultHeaderState()
+            {
+                var state = new MultiColumnHeaderState(new[]
+                {
+                    new MultiColumnHeaderState.Column { headerContent = new GUIContent("Shader"),          width = 200, minWidth = 80,  autoResize = true,  canSort = true, allowToggleVisibility = false },
+                    new MultiColumnHeaderState.Column { headerContent = new GUIContent("Pass"),             width = 90,  minWidth = 50,  autoResize = false, canSort = true },
+                    new MultiColumnHeaderState.Column { headerContent = new GUIContent("Stage"),            width = 70,  minWidth = 50,  autoResize = false, canSort = true },
+                    new MultiColumnHeaderState.Column { headerContent = new GUIContent("Full Space"),       width = 80,  minWidth = 50,  autoResize = false, canSort = true },
+                    new MultiColumnHeaderState.Column { headerContent = new GUIContent("After Settings"),   width = 90,  minWidth = 50,  autoResize = false, canSort = true },
+                    new MultiColumnHeaderState.Column { headerContent = new GUIContent("After Built-in"),   width = 90,  minWidth = 50,  autoResize = false, canSort = true },
+                    new MultiColumnHeaderState.Column { headerContent = new GUIContent("After Scriptable"), width = 100, minWidth = 50,  autoResize = false, canSort = true },
+                    new MultiColumnHeaderState.Column { headerContent = new GUIContent("Proc. Time (s)"),   width = 90,  minWidth = 60,  autoResize = false, canSort = true },
+                });
+                // Default: Full Space descending
+                state.sortedColumnIndex          = 3;
+                state.columns[3].sortedAscending = false;
+                return state;
+            }
+        }
+
         // ── Window state ──────────────────────────────────────────────────────
 
         Shader m_Shader;
@@ -81,8 +243,17 @@ namespace ShaderVariantAnalyzer.Editor
         int  m_SelectedPermIdx = -1;
         Vector2 m_PermScroll, m_PermDetailScroll;
 
+        // Tab 3 — Editor Log
+        readonly List<LogShaderEntry> m_LogEntries        = new List<LogShaderEntry>();
+        readonly List<LogShaderEntry> m_LogFilteredEntries = new List<LogShaderEntry>();
+        string       m_LogFilePath  = string.Empty;
+        string       m_LogStatusMsg = string.Empty;
+        string       m_LogFilter    = string.Empty;
+        [SerializeField] TreeViewState<int> m_LogTreeState;
+        LogTreeView  m_LogTreeView;
+
         static readonly string[] k_TabNames =
-            { "Shader Feature Keywords", "Multi-Compile Keywords", "Permutations" };
+            { "Shader Feature Keywords", "Multi-Compile Keywords", "Permutations", "Editor Log" };
 
         const float k_RowH       = 22f;
         const float k_DetailMinH = 120f;
@@ -238,16 +409,15 @@ namespace ShaderVariantAnalyzer.Editor
             if (!string.IsNullOrEmpty(m_StatusMessage))
                 EditorGUILayout.HelpBox(m_StatusMessage, MessageType.Info);
 
-            if (!m_IsAnalyzed) return;
-
             m_ActiveTab = GUILayout.Toolbar(m_ActiveTab, k_TabNames);
             GUILayout.Space(4f);
 
             switch (m_ActiveTab)
             {
-                case 0: DrawShaderFeatureTab(); break;
-                case 1: DrawMultiCompileTab();  break;
-                case 2: DrawPermutationsTab();  break;
+                case 0: if (m_IsAnalyzed) DrawShaderFeatureTab(); break;
+                case 1: if (m_IsAnalyzed) DrawMultiCompileTab();  break;
+                case 2: if (m_IsAnalyzed) DrawPermutationsTab();  break;
+                case 3: DrawEditorLogTab(); break;
             }
         }
 
@@ -505,6 +675,273 @@ namespace ShaderVariantAnalyzer.Editor
             }
 
             EditorGUILayout.EndScrollView();
+        }
+
+        // ── Tab 3: Editor Log ─────────────────────────────────────────────────
+
+        // Only the two complex matches still use Regex. Hot-path line routing uses IndexOf.
+        // Captures the shader name from:  Compiling shader "Universal Render Pipeline/Unlit"
+        static readonly Regex s_LogCompilingShaderRx = new Regex(
+            @"^Compiling shader ""(.+)""",
+            RegexOptions.Compiled);
+
+        // Number format that uses "." as the thousands separator (e.g. 1.024.576).
+        static readonly System.Globalization.NumberFormatInfo s_DotGroupFmt =
+            new System.Globalization.NumberFormatInfo
+            {
+                NumberGroupSeparator = ".",
+                NumberGroupSizes     = new[] { 3 },
+                NumberDecimalDigits  = 0,
+            };
+
+        // Group 1 = shader+pass concatenated, Group 2 = light-mode tag (not the pass name),
+        // Group 3 = SubShader, Group 4 = ShaderType, Group 5 = Pipeline,
+        // Group 6/7 = compiled/total, Group 8 = time ms
+        static readonly Regex s_LogShaderLineRx = new Regex(
+            @"^Shader=(.+?)\s+\((\w[\w\s]*?)\)\s+\(SubShader:\s*(\d+)\)\s+\(ShaderType:\s*(\w+)\)\s+Pipeline=(\S*)\s+Total=(\d+)/(\d+)\([^)]+\)\s+Time=([\d.]+)ms",
+            RegexOptions.Compiled);
+
+        // Strips every non-digit character so locale separators (. , space) don't break parsing.
+        static readonly Regex s_NonDigitRx = new Regex(@"[^\d]", RegexOptions.Compiled);
+
+        static long ParseVariantCount(string str)
+        {
+            string digits = s_NonDigitRx.Replace(str.Trim(), "");
+            return long.TryParse(digits, out long n) ? n : 0L;
+        }
+
+        void EnsureLogTreeView()
+        {
+            if (m_LogTreeView != null) return;
+            if (m_LogTreeState == null) m_LogTreeState = new TreeViewState<int>();
+            var header    = new MultiColumnHeader(LogTreeView.CreateDefaultHeaderState());
+            m_LogTreeView = new LogTreeView(m_LogTreeState, header);
+        }
+
+        void ApplyLogFilter()
+        {
+            m_LogFilteredEntries.Clear();
+            if (string.IsNullOrEmpty(m_LogFilter))
+                m_LogFilteredEntries.AddRange(m_LogEntries);
+            else
+                foreach (var e in m_LogEntries)
+                    if (e.ShaderName.IndexOf(m_LogFilter, StringComparison.OrdinalIgnoreCase) >= 0
+                     || e.PassName.IndexOf(  m_LogFilter, StringComparison.OrdinalIgnoreCase) >= 0)
+                        m_LogFilteredEntries.Add(e);
+
+            EnsureLogTreeView();
+            m_LogTreeView.SetSource(m_LogFilteredEntries);
+        }
+
+        void DrawEditorLogTab()
+        {
+            // ── File picker ──────────────────────────────────────────────────
+            EditorGUILayout.BeginHorizontal();
+            GUILayout.Label("Log File:", GUILayout.Width(58f));
+            m_LogFilePath = EditorGUILayout.TextField(m_LogFilePath);
+            if (GUILayout.Button("Browse…", GUILayout.Width(68f)))
+            {
+                string picked = EditorUtility.OpenFilePanel("Select Editor Log", "", "log,txt,");
+                if (!string.IsNullOrEmpty(picked))
+                    m_LogFilePath = picked;
+            }
+            using (new EditorGUI.DisabledScope(string.IsNullOrEmpty(m_LogFilePath)))
+            {
+                if (GUILayout.Button("Parse", GUILayout.Width(54f)))
+                    ParseEditorLog(m_LogFilePath);
+            }
+            EditorGUILayout.EndHorizontal();
+
+            GUILayout.Space(2f);
+
+            if (!string.IsNullOrEmpty(m_LogStatusMsg))
+                EditorGUILayout.HelpBox(m_LogStatusMsg, MessageType.Info);
+
+            if (m_LogEntries.Count == 0) return;
+
+            // ── Filter ───────────────────────────────────────────────────────
+            EditorGUILayout.BeginHorizontal();
+            GUILayout.Label("Filter:", GUILayout.Width(40f));
+            string newFilter = EditorGUILayout.TextField(m_LogFilter);
+            if (newFilter != m_LogFilter)
+            {
+                m_LogFilter = newFilter;
+                ApplyLogFilter();
+                GUI.FocusControl(null);
+            }
+            if (GUILayout.Button("✕", GUILayout.Width(22f)))
+            {
+                m_LogFilter = "";
+                ApplyLogFilter();
+                GUI.FocusControl(null);
+            }
+            EditorGUILayout.EndHorizontal();
+            GUILayout.Space(2f);
+
+            // ── TreeView table ───────────────────────────────────────────────
+            EnsureLogTreeView();
+            float treeH  = Mathf.Max(50f, position.height - 150f);
+            Rect treeRect = GUILayoutUtility.GetRect(ContentWidth(), treeH);
+            m_LogTreeView.OnGUI(treeRect);
+
+            // ── Footer ───────────────────────────────────────────────────────
+            int shown = m_LogFilteredEntries.Count, total = m_LogEntries.Count;
+            GUILayout.Label(
+                shown == total ? $"{total} entries" : $"{shown} of {total} entries",
+                EditorStyles.centeredGreyMiniLabel);
+        }
+
+        void ParseEditorLog(string path)
+        {
+            m_LogEntries.Clear();
+            m_LogFilteredEntries.Clear();
+            m_LogStatusMsg = string.Empty;
+
+            if (!File.Exists(path))
+            {
+                m_LogStatusMsg = $"File not found: {path}";
+                Repaint();
+                return;
+            }
+
+            string[] lines;
+            try { lines = File.ReadAllLines(path); }
+            catch (Exception ex)
+            {
+                m_LogStatusMsg = $"Could not read file: {ex.Message}";
+                Repaint();
+                return;
+            }
+
+            LogShaderEntry current          = null;
+            int            detailsExpected   = 0;
+            string         currentShaderName = string.Empty;
+
+            const string k_StepToken      = "[Step ";
+            const string k_ProcessedToken = "Processed in ";
+            const string k_SecondsToken   = " seconds";
+
+            foreach (string raw in lines)
+            {
+                // ── Fast hot-path routing via IndexOf (no regex on most lines) ──
+
+                int stepIdx = raw.IndexOf(k_StepToken, StringComparison.Ordinal);
+                if (stepIdx < 0)
+                {
+                    // "Compiling shader" can appear without any [Step] prefix.
+                    int csIdx = raw.IndexOf("Compiling shader \"", StringComparison.Ordinal);
+                    if (csIdx >= 0)
+                    {
+                        int nameStart = csIdx + 18; // len("Compiling shader \"")
+                        int nameEnd   = raw.IndexOf('"', nameStart);
+                        if (nameEnd > nameStart)
+                            currentShaderName = raw.Substring(nameStart, nameEnd - nameStart);
+                    }
+                    continue;
+                }
+
+                // Locate the closing ']' of "[Step N/M]" and skip trailing whitespace.
+                int closeBracket = raw.IndexOf(']', stepIdx + k_StepToken.Length);
+                if (closeBracket < 0) continue;
+
+                int contentStart = closeBracket + 1;
+                while (contentStart < raw.Length && (raw[contentStart] == ' ' || raw[contentStart] == '\t'))
+                    contentStart++;
+                if (contentStart >= raw.Length) continue;
+
+                string content = raw.Substring(contentStart);
+                char   first   = content[0];
+
+                // ── Dispatch by first character ─────────────────────────────────
+
+                if (first == 'C' && content.StartsWith("Compiling shader \"", StringComparison.Ordinal))
+                {
+                    var m = s_LogCompilingShaderRx.Match(content);
+                    if (m.Success) currentShaderName = m.Groups[1].Value;
+                    continue;
+                }
+
+                if (first == 'S' && content.StartsWith("Shader=", StringComparison.Ordinal))
+                {
+                    var m = s_LogShaderLineRx.Match(content);
+                    if (m.Success)
+                    {
+                        string full = m.Groups[1].Value.Trim();
+                        string shaderName, passName;
+                        if (!string.IsNullOrEmpty(currentShaderName)
+                            && full.StartsWith(currentShaderName, StringComparison.Ordinal))
+                        {
+                            shaderName = currentShaderName;
+                            passName   = full.Substring(currentShaderName.Length);
+                        }
+                        else
+                        {
+                            shaderName = full;
+                            passName   = m.Groups[2].Value;
+                        }
+
+                        current = new LogShaderEntry
+                        {
+                            ShaderName       = shaderName,
+                            PassName         = passName,
+                            SubShaderIndex   = int.Parse(m.Groups[3].Value),
+                            ShaderType       = m.Groups[4].Value,
+                            Pipeline         = m.Groups[5].Value,
+                            CompiledVariants = int.Parse(m.Groups[6].Value),
+                            TotalVariants    = int.Parse(m.Groups[7].Value),
+                            GraphicsAPI      = string.Empty,
+                        };
+                        m_LogEntries.Add(current);
+                        detailsExpected = 5;
+                    }
+                    continue;
+                }
+
+                // Detail lines (Target / Full / After …)
+                if (current == null || detailsExpected == 0) continue;
+
+                switch (first)
+                {
+                    case 'T':
+                        if (content.StartsWith("Target graphics API:", StringComparison.Ordinal))
+                            current.GraphicsAPI = content.Substring(20).Trim();
+                        break;
+                    case 'F':
+                        if (content.StartsWith("Full variant space:", StringComparison.Ordinal))
+                            current.FullVariantSpace = ParseVariantCount(content.Substring(19));
+                        break;
+                    case 'A':
+                        if (content.StartsWith("After settings filtering:", StringComparison.Ordinal))
+                            current.AfterSettingsFilter = ParseVariantCount(content.Substring(25));
+                        else if (content.StartsWith("After built-in stripping:", StringComparison.Ordinal))
+                            current.AfterBuiltinStripping = ParseVariantCount(content.Substring(25));
+                        else if (content.StartsWith("After scriptable stripping:", StringComparison.Ordinal))
+                        {
+                            current.AfterScriptableStripping = ParseVariantCount(content.Substring(27));
+                            detailsExpected = 0;
+                        }
+                        break;
+                    case 'P':
+                        if (current.ProcessTimeSec == 0f
+                            && content.StartsWith(k_ProcessedToken, StringComparison.Ordinal))
+                        {
+                            int numEnd = content.IndexOf(k_SecondsToken, k_ProcessedToken.Length,
+                                                         StringComparison.Ordinal);
+                            if (numEnd > k_ProcessedToken.Length)
+                                float.TryParse(
+                                    content.Substring(k_ProcessedToken.Length,
+                                                      numEnd - k_ProcessedToken.Length),
+                                    System.Globalization.NumberStyles.Float,
+                                    System.Globalization.CultureInfo.InvariantCulture,
+                                    out current.ProcessTimeSec);
+                        }
+                        break;
+                }
+            }
+
+            ApplyLogFilter();
+            m_LogStatusMsg = $"Parsed {m_LogEntries.Count} shader compilation entries";
+            Repaint();
         }
 
         // ── Column header helper ───────────────────────────────────────────────

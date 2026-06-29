@@ -54,7 +54,7 @@ GraphicsSettings:
   m_TierSettings: []
   m_LightmapStripping: 0
   m_FogStripping: 0
-  m_InstancingStripping: 0
+  m_InstancingStripping: 1
   m_BrgStripping: 1
   m_LightmapKeepPlain: 0
   m_LightmapKeepDirCombined: 0
@@ -62,20 +62,20 @@ GraphicsSettings:
   m_LightmapKeepDynamicDirCombined: 0
   m_LightmapKeepShadowMask: 0
   m_LightmapKeepSubtractive: 0
-  m_FogKeepLinear: 0
+  m_FogKeepLinear: 1
   m_FogKeepExp: 0
   m_FogKeepExp2: 0
   m_AlbedoSwatchInfos: []
   m_RenderPipelineGlobalSettingsMap:
-    UnityEngine.Rendering.Universal.UniversalRenderPipeline: {fileID: 11400000, guid: 18dc0cd2c080841dea60987a38ce93fa, type: 2}
+    UnityEngine.Rendering.Universal.UniversalRenderPipeline: {fileID: 11400000, guid: f02d251310db6b946a2ee1d73dc1472b, type: 2}
   m_ShaderBuildSettings:
     keywordDeclarationOverrides:
     - keywords:
       - name: _
         keepInBuild: 1
-      - name: _REFLECTION_PROBE_BLENDING
+      - name: LOD_FADE_CROSSFADE
         keepInBuild: 1
-      variantGenerationMode: 1
+      variantGenerationMode: 3
     numInternalDefines: 0
     defines: []
   m_LightsUseLinearIntensity: 1
