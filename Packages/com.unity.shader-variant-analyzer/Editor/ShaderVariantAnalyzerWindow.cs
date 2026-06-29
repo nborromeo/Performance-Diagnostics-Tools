@@ -815,7 +815,6 @@ namespace ShaderVariantAnalyzer.Editor
             {
                 m_LogFilter = newFilter;
                 ApplyLogFilter();
-                GUI.FocusControl(null);
             }
             if (GUILayout.Button("✕", GUILayout.Width(22f)))
             {
@@ -1058,7 +1057,9 @@ namespace ShaderVariantAnalyzer.Editor
             }
 
             ApplyLogFilter();
-            m_LogStatusMsg = $"Parsed {m_LogEntries.Count} shader compilation entries";
+            float totalStrip   = 0f, totalCompile = 0f;
+            foreach (var e in m_LogEntries) { totalStrip += e.ProcessTimeSec; totalCompile += e.FinishedTimeSec; }
+            m_LogStatusMsg = $"Parsed {m_LogEntries.Count} shader compilation entries  |  Total Strip Time: {totalStrip:F3}s  |  Total Compile Time: {totalCompile:F3}s";
             Repaint();
         }
 
