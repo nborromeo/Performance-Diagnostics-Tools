@@ -752,6 +752,17 @@ namespace ShaderVariantAnalyzer.Editor
             _    => abbrev,
         };
 
+        static string FormatDuration(float seconds)
+        {
+            int totalSec = Mathf.FloorToInt(seconds);
+            if (totalSec < 60)
+                return $"{seconds:F3}s";
+            int h = totalSec / 3600;
+            int m = (totalSec % 3600) / 60;
+            int s = totalSec % 60;
+            return h > 0 ? $"{h}h {m}m {s}s" : $"{m}m {s}s";
+        }
+
         static long ParseVariantCount(string str)
         {
             string digits = s_NonDigitRx.Replace(str.Trim(), "");
@@ -1059,7 +1070,7 @@ namespace ShaderVariantAnalyzer.Editor
             ApplyLogFilter();
             float totalStrip   = 0f, totalCompile = 0f;
             foreach (var e in m_LogEntries) { totalStrip += e.ProcessTimeSec; totalCompile += e.FinishedTimeSec; }
-            m_LogStatusMsg = $"Parsed {m_LogEntries.Count} shader compilation entries  |  Total Strip Time: {totalStrip:F3}s  |  Total Compile Time: {totalCompile:F3}s";
+            m_LogStatusMsg = $"Parsed {m_LogEntries.Count} shader compilation entries  |  Total Strip Time: {FormatDuration(totalStrip)}  |  Total Compile Time: {FormatDuration(totalCompile)}";
             Repaint();
         }
 
