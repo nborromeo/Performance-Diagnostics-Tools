@@ -14,6 +14,7 @@ namespace BuildLogAnalyzer.Editor
         sealed class LogShaderEntry
         {
             public int    LineNumber;
+            public int    LineNumberEnd;
             public string ShaderName;
             public string PassName;
             public string PassTag          = string.Empty;
@@ -137,7 +138,7 @@ namespace BuildLogAnalyzer.Editor
                     CenterRectUsingSingleLineHeight(ref rect);
                     string text = args.GetColumn(i) switch
                     {
-                        0  => e.LineNumber.ToString(),
+                        0  => e.LineNumberEnd > 0 ? $"{e.LineNumber}–{e.LineNumberEnd}" : e.LineNumber.ToString(),
                         1  => e.ShaderName,
                         2  => e.PassName,
                         3  => e.ShaderType,
@@ -161,7 +162,7 @@ namespace BuildLogAnalyzer.Editor
             {
                 var state = new MultiColumnHeaderState(new[]
                 {
-                    new MultiColumnHeaderState.Column { headerContent = new GUIContent("Line",  "Log file line number"),                                                                                        width = 55,  minWidth = 40,  autoResize = false, canSort = true, allowToggleVisibility = false },
+                    new MultiColumnHeaderState.Column { headerContent = new GUIContent("Line",  "Log file line range for this shader pass (start–end)"),                                                       width = 90,  minWidth = 55,  autoResize = false, canSort = true, allowToggleVisibility = false },
                     new MultiColumnHeaderState.Column { headerContent = new GUIContent("Shader"),          width = 200, minWidth = 80,  autoResize = true,  canSort = true, allowToggleVisibility = false },
                     new MultiColumnHeaderState.Column { headerContent = new GUIContent("Pass"),             width = 90,  minWidth = 50,  autoResize = false, canSort = true },
                     new MultiColumnHeaderState.Column { headerContent = new GUIContent("Stage"),            width = 55,  minWidth = 40,  autoResize = false, canSort = true },
@@ -343,6 +344,7 @@ namespace BuildLogAnalyzer.Editor
                                 && e.ShaderType == shaderType
                                 && (string.IsNullOrEmpty(currentShaderName) || e.ShaderName == currentShaderName))
                             {
+                                e.LineNumberEnd     = lineIdx + 1;
                                 e.FinishedTimeSec   = finSec;
                                 e.LocalCacheHits    = localHits;
                                 e.LocalCacheCpuSec  = localCpu;

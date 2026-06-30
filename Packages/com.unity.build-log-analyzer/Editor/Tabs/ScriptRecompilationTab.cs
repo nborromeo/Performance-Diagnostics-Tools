@@ -22,6 +22,7 @@ namespace BuildLogAnalyzer.Editor
         sealed class RecompilationEntry
         {
             public int               LineNumber;
+            public int               LineNumberEnd;
             public List<string>      Reasons         = new List<string>();
             public List<TundraSuccess> TundraBuilds  = new List<TundraSuccess>();
             public float             TotalTimeSec;
@@ -90,7 +91,7 @@ namespace BuildLogAnalyzer.Editor
                     CenterRectUsingSingleLineHeight(ref rect);
                     string text = args.GetColumn(i) switch
                     {
-                        0 => e.LineNumber.ToString(),
+                        0 => e.LineNumberEnd > 0 ? $"{e.LineNumber}–{e.LineNumberEnd}" : e.LineNumber.ToString(),
                         1 => e.ReasonsDisplay,
                         2 => e.TotalTimeSec > 0f ? e.TotalTimeSec.ToString("F2") : "—",
                         _ => string.Empty
@@ -103,7 +104,7 @@ namespace BuildLogAnalyzer.Editor
             {
                 var state = new MultiColumnHeaderState(new[]
                 {
-                    new MultiColumnHeaderState.Column { headerContent = new GUIContent("Line",           "Log file line where the Script compilation block started"),                                          width = 55,  minWidth = 40,  autoResize = false, canSort = true, allowToggleVisibility = false },
+                    new MultiColumnHeaderState.Column { headerContent = new GUIContent("Line",           "Log file line range of this recompilation block (start–end at last Tundra success)"),               width = 90,  minWidth = 55,  autoResize = false, canSort = true, allowToggleVisibility = false },
                     new MultiColumnHeaderState.Column { headerContent = new GUIContent("Reasons",        "Reasons that triggered this script compilation"),                                                    width = 380, minWidth = 100, autoResize = true,  canSort = true, allowToggleVisibility = false },
                     new MultiColumnHeaderState.Column { headerContent = new GUIContent("Total Time (s)", "Cumulative time of all Tundra build success entries associated with this recompilation"),           width = 100, minWidth = 60,  autoResize = false, canSort = true },
                 });
@@ -203,7 +204,8 @@ namespace BuildLogAnalyzer.Editor
                             ItemsUpdated   = updated,
                             ItemsEvaluated = evaluated,
                         });
-                        current.TotalTimeSec += sec;
+                        current.TotalTimeSec  += sec;
+                        current.LineNumberEnd  = lineIdx + 1;
                     }
                 }
             }

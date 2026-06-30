@@ -13,6 +13,7 @@ namespace BuildLogAnalyzer.Editor
         sealed class RefreshEntry
         {
             public int          LineNumber;
+            public int          LineNumberEnd;
             public string       Guid;
             public float        TotalTimeSec;
             public string       Reason;
@@ -92,7 +93,7 @@ namespace BuildLogAnalyzer.Editor
                     CenterRectUsingSingleLineHeight(ref rect);
                     string text = args.GetColumn(i) switch
                     {
-                        0 => e.LineNumber.ToString(),
+                        0 => e.LineNumberEnd > e.LineNumber ? $"{e.LineNumber}–{e.LineNumberEnd}" : e.LineNumber.ToString(),
                         1 => e.Guid,
                         2 => e.TotalTimeSec.ToString("F3"),
                         3 => e.Reason,
@@ -106,7 +107,7 @@ namespace BuildLogAnalyzer.Editor
             {
                 var state = new MultiColumnHeaderState(new[]
                 {
-                    new MultiColumnHeaderState.Column { headerContent = new GUIContent("Line",       "Log file line number"),            width = 55,  minWidth = 40, autoResize = false, canSort = true, allowToggleVisibility = false },
+                    new MultiColumnHeaderState.Column { headerContent = new GUIContent("Line",       "Log file line range of this refresh block (start–end)"),  width = 90,  minWidth = 55, autoResize = false, canSort = true, allowToggleVisibility = false },
                     new MultiColumnHeaderState.Column { headerContent = new GUIContent("Refresh ID", "Asset Pipeline Refresh GUID"),     width = 280, minWidth = 80, autoResize = true,  canSort = true, allowToggleVisibility = false },
                     new MultiColumnHeaderState.Column { headerContent = new GUIContent("Time (s)",   "Total refresh duration"),          width = 75,  minWidth = 50, autoResize = false, canSort = true },
                     new MultiColumnHeaderState.Column { headerContent = new GUIContent("Reason",     "What initiated the refresh"),      width = 220, minWidth = 80, autoResize = false, canSort = true },
@@ -220,11 +221,12 @@ namespace BuildLogAnalyzer.Editor
 
                 m_Entries.Add(new RefreshEntry
                 {
-                    LineNumber   = i + 1,
-                    Guid         = guid,
-                    TotalTimeSec = timeSec,
-                    Reason       = reason,
-                    DetailLines  = details,
+                    LineNumber    = i + 1,
+                    LineNumberEnd = i + 1 + details.Count,
+                    Guid          = guid,
+                    TotalTimeSec  = timeSec,
+                    Reason        = reason,
+                    DetailLines   = details,
                 });
             }
 

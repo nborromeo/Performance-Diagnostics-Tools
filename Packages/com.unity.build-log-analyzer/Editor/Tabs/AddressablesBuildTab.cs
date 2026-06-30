@@ -13,6 +13,7 @@ namespace BuildLogAnalyzer.Editor
         sealed class AddressablesBuildEntry
         {
             public int    LineNumber;
+            public int    LineNumberEnd;
             public float  DurationSec;
             public string DurationDisplay;
         }
@@ -73,7 +74,7 @@ namespace BuildLogAnalyzer.Editor
                     CenterRectUsingSingleLineHeight(ref rect);
                     string text = args.GetColumn(i) switch
                     {
-                        0 => e.LineNumber.ToString(),
+                        0 => e.LineNumberEnd > e.LineNumber ? $"{e.LineNumber}–{e.LineNumberEnd}" : e.LineNumber.ToString(),
                         1 => e.DurationDisplay,
                         _ => string.Empty
                     };
@@ -85,7 +86,7 @@ namespace BuildLogAnalyzer.Editor
             {
                 var state = new MultiColumnHeaderState(new[]
                 {
-                    new MultiColumnHeaderState.Column { headerContent = new GUIContent("Line",     "Log file line where the Addressables build started"),  width = 55,  minWidth = 40, autoResize = false, canSort = true, allowToggleVisibility = false },
+                    new MultiColumnHeaderState.Column { headerContent = new GUIContent("Line",     "Log file line range where the Addressables build ran (start–end)"),  width = 90,  minWidth = 55, autoResize = false, canSort = true, allowToggleVisibility = false },
                     new MultiColumnHeaderState.Column { headerContent = new GUIContent("Duration", "Total build duration"),                                 width = 120, minWidth = 60, autoResize = true,  canSort = true, allowToggleVisibility = false },
                 });
                 state.sortedColumnIndex          = 0;
@@ -149,6 +150,7 @@ namespace BuildLogAnalyzer.Editor
                         m_Entries.Add(new AddressablesBuildEntry
                         {
                             LineNumber      = pendingStartLine,
+                            LineNumberEnd   = lineIdx + 1,
                             DurationSec     = ParseDuration(durStr),
                             DurationDisplay = durStr,
                         });

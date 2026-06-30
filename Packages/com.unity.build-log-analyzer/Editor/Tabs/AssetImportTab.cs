@@ -14,6 +14,7 @@ namespace BuildLogAnalyzer.Editor
         sealed class AssetImportEntry
         {
             public int          LineNumber;
+            public int          LineNumberEnd;
             public string       AssetPath;
             public string       AssetName;
             public float        TotalTimeSec;
@@ -123,7 +124,7 @@ namespace BuildLogAnalyzer.Editor
                         ? new GUIContent(e.AssetName, e.AssetPath)
                         : new GUIContent(col switch
                         {
-                            0 => e.LineNumber.ToString(),
+                            0 => e.LineNumberEnd > e.LineNumber ? $"{e.LineNumber}–{e.LineNumberEnd}" : e.LineNumber.ToString(),
                             2 => e.TotalTimeSec.ToString("F4"),
                             3 => e.ImportCount.ToString(),
                             _ => string.Empty
@@ -136,7 +137,7 @@ namespace BuildLogAnalyzer.Editor
             {
                 var state = new MultiColumnHeaderState(new[]
                 {
-                    new MultiColumnHeaderState.Column { headerContent = new GUIContent("Line",     "Log file line number of the first import"),                                      width = 55,  minWidth = 40, autoResize = false, canSort = true, allowToggleVisibility = false },
+                    new MultiColumnHeaderState.Column { headerContent = new GUIContent("Line",     "Log file line range of this import (start–end; end updates on reimport)"),       width = 90,  minWidth = 55, autoResize = false, canSort = true, allowToggleVisibility = false },
                     new MultiColumnHeaderState.Column { headerContent = new GUIContent("Asset"),                                                                                     width = 300, minWidth = 80, autoResize = true,  canSort = true, allowToggleVisibility = false },
                     new MultiColumnHeaderState.Column { headerContent = new GUIContent("Time (s)", "Total import time in seconds (summed across all imports of this asset)"),        width = 80,  minWidth = 50, autoResize = false, canSort = true },
                     new MultiColumnHeaderState.Column { headerContent = new GUIContent("Count",    "Number of times this asset was imported"),                                       width = 60,  minWidth = 40, autoResize = false, canSort = true },
@@ -303,8 +304,9 @@ namespace BuildLogAnalyzer.Editor
                                 dict[assetPath] = entry;
                             }
 
-                            entry.TotalTimeSec += timeSec;
+                            entry.TotalTimeSec  += timeSec;
                             entry.ImportCount++;
+                            entry.LineNumberEnd  = lineIdx + 1;
                             pendingRefreshBatch.Add(assetPath);
                         }
                     }
