@@ -131,6 +131,9 @@ namespace BuildLogAnalyzer.Editor
         bool               m_Resizing;
         EditorWindow       m_Window;
 
+        AssetImportTab     m_ImportTab;
+        Action             m_NavigateToImportTab;
+
         // ── BuildLogAnalyzerTab ───────────────────────────────────────────────
 
         public override string TabName => "Asset DB Refreshes";
@@ -146,6 +149,12 @@ namespace BuildLogAnalyzer.Editor
         }
 
         public override string GetStatusMessage() => m_StatusMsg;
+
+        public void SetImportTabNavigation(AssetImportTab importTab, Action navigateAction)
+        {
+            m_ImportTab           = importTab;
+            m_NavigateToImportTab = navigateAction;
+        }
 
         public void SelectRefreshByGuid(string guid)
         {
@@ -271,19 +280,61 @@ namespace BuildLogAnalyzer.Editor
                 return;
             }
 
-            var   inner       = new Rect(rect.x + 4, rect.y + 4, rect.width - 8, rect.height - 8);
-            float lh          = EditorGUIUtility.singleLineHeight + 2f;
-            float contentH    = m_Selected.DetailLines.Count * lh;
+            var imports = m_ImportTab?.GetImportsForRefreshGuid(m_Selected.Guid)
+                          ?? new List<(string name, string path, float totalTime)>();
+
+            var   inner = new Rect(rect.x + 4, rect.y + 4, rect.width - 8, rect.height - 8);
+            float lh    = EditorGUIUtility.singleLineHeight + 2f;
+
+            // Section heights: header + asset rows + gap + detail lines.
+            int   assetRows   = Mathf.Max(1, imports.Count);
+            float contentH    = lh + assetRows * lh + lh + m_Selected.DetailLines.Count * lh;
             var   contentRect = new Rect(0, 0, inner.width - 16f, Mathf.Max(contentH, inner.height));
 
             m_DetailScroll = GUI.BeginScrollView(inner, m_DetailScroll, contentRect);
             float y = 0f;
-            foreach (string line in m_Selected.DetailLines)
+
+            // ── Assets section ────────────────────────────────────────────────
+            GUI.Label(new Rect(0, y, contentRect.width, EditorGUIUtility.singleLineHeight),
+                imports.Count == 0 ? "Imported assets: none" : $"Imported assets ({imports.Count}):",
+                EditorStyles.boldLabel);
+            y += lh;
+
+            if (imports.Count == 0)
             {
-                GUI.Label(new Rect(0, y, contentRect.width, EditorGUIUtility.singleLineHeight), line, EditorStyles.miniLabel);
+                GUI.Label(new Rect(0, y, contentRect.width, EditorGUIUtility.singleLineHeight),
+                    "  No asset imports associated with this refresh.", EditorStyles.miniLabel);
                 y += lh;
             }
+            else
+            {
+                foreach (var (name, path, totalTime) in imports)
+                {
+                    string label = $"  {name}  ({totalTime:F4}s)";
+                    if (GUI.Button(new Rect(0, y, contentRect.width, EditorGUIUtility.singleLineHeight),
+                            new GUIContent(label, path), EditorStyles.linkLabel))
+                        NavigateToImport(path);
+                    y += lh;
+                }
+            }
+
+            y += 4f;
+
+            // ── Refresh detail lines ──────────────────────────────────────────
+            foreach (string line in m_Selected.DetailLines)
+            {
+                GUI.Label(new Rect(0, y, contentRect.width, EditorGUIUtility.singleLineHeight),
+                    line, EditorStyles.miniLabel);
+                y += lh;
+            }
+
             GUI.EndScrollView();
+        }
+
+        void NavigateToImport(string path)
+        {
+            m_ImportTab?.SelectImportByPath(path);
+            m_NavigateToImportTab?.Invoke();
         }
 
         void HandleSplitterDrag(Rect resizerRect)

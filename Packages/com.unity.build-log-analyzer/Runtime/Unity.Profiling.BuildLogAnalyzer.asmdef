@@ -1,12 +1,10 @@
 {
-    "name": "BuildLogAnalyzer.Editor",
-    "rootNamespace": "BuildLogAnalyzer.Editor",
+    "name": "Unity.Profiling.BuildLogAnalyzer",
+    "rootNamespace": "",
     "references": [
-        "GUID:40322e16f355e4b02a89f5f2935af53c"
+        "GUID:39013643cf30d4534a6c0a619d7bdca7"
     ],
-    "includePlatforms": [
-        "Editor"
-    ],
+    "includePlatforms": [],
     "excludePlatforms": [],
     "allowUnsafeCode": false,
     "overrideReferences": false,

@@ -46,6 +46,17 @@ namespace BuildLogAnalyzer.Editor
             public AssetImportEntry GetEntry(int sortedIndex)
                 => (sortedIndex >= 0 && sortedIndex < m_Source.Count) ? m_Source[sortedIndex] : null;
 
+            public void SelectByPath(string path)
+            {
+                for (int i = 0; i < m_Source.Count; i++)
+                {
+                    if (!string.Equals(m_Source[i].AssetPath, path, StringComparison.OrdinalIgnoreCase)) continue;
+                    SetSelection(new List<int> { i });
+                    FrameItem(i);
+                    return;
+                }
+            }
+
             void SortSource()
             {
                 int col = multiColumnHeader.sortedColumnIndex;
@@ -159,6 +170,30 @@ namespace BuildLogAnalyzer.Editor
         public override string TabName => "Asset Importing";
 
         public override void OnEnable(EditorWindow window) => m_Window = window;
+
+        public List<(string name, string path, float totalTime)> GetImportsForRefreshGuid(string guid)
+        {
+            var result = new List<(string, string, float)>();
+            foreach (var e in m_Entries)
+                if (e.RefreshGuids.Contains(guid))
+                    result.Add((e.AssetName, e.AssetPath, e.TotalTimeSec));
+            return result;
+        }
+
+        public void SelectImportByPath(string path)
+        {
+            bool inFilter = false;
+            foreach (var e in m_FilteredEntries)
+                if (string.Equals(e.AssetPath, path, StringComparison.OrdinalIgnoreCase)) { inFilter = true; break; }
+            if (!inFilter) { m_Filter = string.Empty; ApplyFilter(); }
+
+            EnsureTreeView();
+            m_TreeView.SelectByPath(path);
+
+            foreach (var e in m_Entries)
+                if (string.Equals(e.AssetPath, path, StringComparison.OrdinalIgnoreCase)) { m_Selected = e; break; }
+            m_Window?.Repaint();
+        }
 
         public void SetRefreshTabNavigation(AssetDatabaseRefreshTab refreshTab, Action navigateAction)
         {
