@@ -9,6 +9,12 @@
       },
       "url": "https://packages.unity.com"
     },
+    "com.unity.build-log-analyzer": {
+      "version": "file:com.unity.build-log-analyzer",
+      "depth": 0,
+      "source": "embedded",
+      "dependencies": {}
+    },
     "com.unity.burst": {
       "version": "1.8.29",
       "depth": 2,

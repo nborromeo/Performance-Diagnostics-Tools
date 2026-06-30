@@ -8,6 +8,7 @@
     "com.unity.multiplayer.center": "1.0.1",
     "com.unity.performance-diagnostics": "file:com.unity.performance-diagnostics",
     "com.unity.render-pipelines.universal": "17.6.0",
+    "com.unity.build-log-analyzer": "file:com.unity.build-log-analyzer",
     "com.unity.shader-variant-analyzer": "file:com.unity.shader-variant-analyzer",
     "com.unity.test-framework": "1.7.1",
     "com.unity.timeline": "1.8.12",
