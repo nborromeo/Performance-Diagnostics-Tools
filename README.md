@@ -242,6 +242,8 @@ Selecting a row expands a detail panel listing every material in that permutatio
 
 ## Build Log Analyzer
 
+<img width="1410" height="725" alt="image" src="https://github.com/user-attachments/assets/3b0a3399-f75b-4c0a-b812-226b92014a3f" />
+
 Parses a Unity Editor log file and surfaces timing and diagnostic data across multiple categories in a set of sortable tabs. Also generates a Chrome-compatible trace file so you can load the entire build timeline into `chrome://tracing` or Perfetto.
 
 **Open:** `Window > Analysis > Build Log Analyzer`
