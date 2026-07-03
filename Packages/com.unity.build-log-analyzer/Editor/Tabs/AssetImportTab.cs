@@ -71,6 +71,7 @@ namespace BuildLogAnalyzer.Editor
                         1 => string.Compare(a.AssetName, b.AssetName, StringComparison.OrdinalIgnoreCase),
                         2 => a.TotalTimeSec.CompareTo(b.TotalTimeSec),
                         3 => a.ImportCount.CompareTo(b.ImportCount),
+                        4 => a.LineNumber.CompareTo(b.LineNumber), // chronological == line order; survives midnight rollover
                         _ => 0
                     };
                     return asc ? cmp : -cmp;
@@ -120,11 +121,23 @@ namespace BuildLogAnalyzer.Editor
                     var rect = args.GetCellRect(i);
                     CenterRectUsingSingleLineHeight(ref rect);
                     int col = args.GetColumn(i);
+
+                    if (col == 0)
+                    {
+                        LogFileNavigator.DrawLineCell(rect, e.LineNumber, e.LineNumberEnd);
+                        continue;
+                    }
+
+                    if (col == 4)
+                    {
+                        LogFileNavigator.DrawTimestampCell(rect, e.LineNumber, e.LineNumberEnd);
+                        continue;
+                    }
+
                     var content = col == 1
                         ? new GUIContent(e.AssetName, e.AssetPath)
                         : new GUIContent(col switch
                         {
-                            0 => e.LineNumberEnd > e.LineNumber ? $"{e.LineNumber}–{e.LineNumberEnd}" : e.LineNumber.ToString(),
                             2 => e.TotalTimeSec.ToString("F4"),
                             3 => e.ImportCount.ToString(),
                             _ => string.Empty
@@ -135,13 +148,17 @@ namespace BuildLogAnalyzer.Editor
 
             public static MultiColumnHeaderState CreateDefaultHeaderState()
             {
-                var state = new MultiColumnHeaderState(new[]
+                var columns = new List<MultiColumnHeaderState.Column>
                 {
                     new MultiColumnHeaderState.Column { headerContent = new GUIContent("Line",     "Log file line range of this import (start–end; end updates on reimport)"),       width = 90,  minWidth = 55, autoResize = false, canSort = true, allowToggleVisibility = false },
                     new MultiColumnHeaderState.Column { headerContent = new GUIContent("Asset"),                                                                                     width = 300, minWidth = 80, autoResize = true,  canSort = true, allowToggleVisibility = false },
                     new MultiColumnHeaderState.Column { headerContent = new GUIContent("Time (s)", "Total import time in seconds (summed across all imports of this asset)"),        width = 80,  minWidth = 50, autoResize = false, canSort = true },
                     new MultiColumnHeaderState.Column { headerContent = new GUIContent("Count",    "Number of times this asset was imported"),                                       width = 60,  minWidth = 40, autoResize = false, canSort = true },
-                });
+                };
+                if (LogTimestamps.HasTimestamps)
+                    columns.Add(new MultiColumnHeaderState.Column { headerContent = new GUIContent("Timestamp", $"Log timestamp at the start line ({LogTimestamps.DetectedFormatName}); hover a range row for start → end"), width = 160, minWidth = 70, autoResize = false, canSort = true, allowToggleVisibility = true });
+
+                var state = new MultiColumnHeaderState(columns.ToArray());
                 state.sortedColumnIndex          = 2;
                 state.columns[2].sortedAscending = false;
                 return state;
@@ -208,6 +225,7 @@ namespace BuildLogAnalyzer.Editor
             m_FilteredEntries.Clear();
             m_StatusMsg = string.Empty;
             m_Selected  = null;
+            m_TreeView  = null; // rebuild columns next parse (timestamp column may appear/disappear)
         }
 
         public override string GetStatusMessage() => m_StatusMsg;

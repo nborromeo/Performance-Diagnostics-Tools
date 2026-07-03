@@ -116,6 +116,9 @@ namespace BuildLogAnalyzer.Editor
                 return;
             }
 
+            LogFileNavigator.LogFilePath = m_LogFilePath;
+            LogTimestamps.Detect(lines);
+
             try
             {
                 EditorUtility.DisplayProgressBar("Build Log Analyzer", "Parsing log file…", 0f);

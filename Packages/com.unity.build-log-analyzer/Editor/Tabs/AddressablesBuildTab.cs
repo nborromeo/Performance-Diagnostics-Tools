@@ -49,6 +49,7 @@ namespace BuildLogAnalyzer.Editor
                     {
                         0 => a.LineNumber.CompareTo(b.LineNumber),
                         1 => a.DurationSec.CompareTo(b.DurationSec),
+                        2 => a.LineNumber.CompareTo(b.LineNumber), // chronological == line order; survives midnight rollover
                         _ => 0
                     };
                     return asc ? cmp : -cmp;
@@ -72,9 +73,22 @@ namespace BuildLogAnalyzer.Editor
                 {
                     var rect = args.GetCellRect(i);
                     CenterRectUsingSingleLineHeight(ref rect);
-                    string text = args.GetColumn(i) switch
+                    int col = args.GetColumn(i);
+
+                    if (col == 0)
                     {
-                        0 => e.LineNumberEnd > e.LineNumber ? $"{e.LineNumber}–{e.LineNumberEnd}" : e.LineNumber.ToString(),
+                        LogFileNavigator.DrawLineCell(rect, e.LineNumber, e.LineNumberEnd);
+                        continue;
+                    }
+
+                    if (col == 2)
+                    {
+                        LogFileNavigator.DrawTimestampCell(rect, e.LineNumber, e.LineNumberEnd);
+                        continue;
+                    }
+
+                    string text = col switch
+                    {
                         1 => e.DurationDisplay,
                         _ => string.Empty
                     };
@@ -84,11 +98,15 @@ namespace BuildLogAnalyzer.Editor
 
             public static MultiColumnHeaderState CreateDefaultHeaderState()
             {
-                var state = new MultiColumnHeaderState(new[]
+                var columns = new List<MultiColumnHeaderState.Column>
                 {
                     new MultiColumnHeaderState.Column { headerContent = new GUIContent("Line",     "Log file line range where the Addressables build ran (start–end)"),  width = 90,  minWidth = 55, autoResize = false, canSort = true, allowToggleVisibility = false },
                     new MultiColumnHeaderState.Column { headerContent = new GUIContent("Duration", "Total build duration"),                                 width = 120, minWidth = 60, autoResize = true,  canSort = true, allowToggleVisibility = false },
-                });
+                };
+                if (LogTimestamps.HasTimestamps)
+                    columns.Add(new MultiColumnHeaderState.Column { headerContent = new GUIContent("Timestamp", $"Log timestamp at the start line ({LogTimestamps.DetectedFormatName}); hover a range row for start → end"), width = 160, minWidth = 70, autoResize = false, canSort = true, allowToggleVisibility = true });
+
+                var state = new MultiColumnHeaderState(columns.ToArray());
                 state.sortedColumnIndex          = 0;
                 state.columns[0].sortedAscending = true;
                 return state;
@@ -111,6 +129,7 @@ namespace BuildLogAnalyzer.Editor
         {
             m_Entries.Clear();
             m_StatusMsg = string.Empty;
+            m_TreeView  = null; // rebuild columns next parse (timestamp column may appear/disappear)
         }
 
         public override string GetStatusMessage() => m_StatusMsg;

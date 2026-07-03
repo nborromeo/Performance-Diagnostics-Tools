@@ -68,6 +68,7 @@ namespace BuildLogAnalyzer.Editor
                         1 => string.Compare(a.Guid, b.Guid, StringComparison.Ordinal),
                         2 => a.TotalTimeSec.CompareTo(b.TotalTimeSec),
                         3 => string.Compare(a.Reason, b.Reason, StringComparison.OrdinalIgnoreCase),
+                        4 => a.LineNumber.CompareTo(b.LineNumber), // chronological == line order; survives midnight rollover
                         _ => 0
                     };
                     return asc ? cmp : -cmp;
@@ -91,9 +92,22 @@ namespace BuildLogAnalyzer.Editor
                 {
                     var rect = args.GetCellRect(i);
                     CenterRectUsingSingleLineHeight(ref rect);
-                    string text = args.GetColumn(i) switch
+                    int col = args.GetColumn(i);
+
+                    if (col == 0)
                     {
-                        0 => e.LineNumberEnd > e.LineNumber ? $"{e.LineNumber}–{e.LineNumberEnd}" : e.LineNumber.ToString(),
+                        LogFileNavigator.DrawLineCell(rect, e.LineNumber, e.LineNumberEnd);
+                        continue;
+                    }
+
+                    if (col == 4)
+                    {
+                        LogFileNavigator.DrawTimestampCell(rect, e.LineNumber, e.LineNumberEnd);
+                        continue;
+                    }
+
+                    string text = col switch
+                    {
                         1 => e.Guid,
                         2 => e.TotalTimeSec.ToString("F3"),
                         3 => e.Reason,
@@ -105,13 +119,17 @@ namespace BuildLogAnalyzer.Editor
 
             public static MultiColumnHeaderState CreateDefaultHeaderState()
             {
-                var state = new MultiColumnHeaderState(new[]
+                var columns = new List<MultiColumnHeaderState.Column>
                 {
-                    new MultiColumnHeaderState.Column { headerContent = new GUIContent("Line",       "Log file line range of this refresh block (start–end)"),  width = 90,  minWidth = 55, autoResize = false, canSort = true, allowToggleVisibility = false },
+                    new MultiColumnHeaderState.Column { headerContent = new GUIContent("Line",       "Line range of this refresh: start = first import since the previous refresh, end = the refresh summary line"),  width = 90,  minWidth = 55, autoResize = false, canSort = true, allowToggleVisibility = false },
                     new MultiColumnHeaderState.Column { headerContent = new GUIContent("Refresh ID", "Asset Pipeline Refresh GUID"),     width = 280, minWidth = 80, autoResize = true,  canSort = true, allowToggleVisibility = false },
                     new MultiColumnHeaderState.Column { headerContent = new GUIContent("Time (s)",   "Total refresh duration"),          width = 75,  minWidth = 50, autoResize = false, canSort = true },
                     new MultiColumnHeaderState.Column { headerContent = new GUIContent("Reason",     "What initiated the refresh"),      width = 220, minWidth = 80, autoResize = false, canSort = true },
-                });
+                };
+                if (LogTimestamps.HasTimestamps)
+                    columns.Add(new MultiColumnHeaderState.Column { headerContent = new GUIContent("Timestamp", $"Log timestamp at the start line ({LogTimestamps.DetectedFormatName}); hover a range row for start → end"), width = 160, minWidth = 70, autoResize = false, canSort = true, allowToggleVisibility = true });
+
+                var state = new MultiColumnHeaderState(columns.ToArray());
                 state.sortedColumnIndex          = 0;
                 state.columns[0].sortedAscending = true;
                 return state;
@@ -147,6 +165,7 @@ namespace BuildLogAnalyzer.Editor
             m_FilteredEntries.Clear();
             m_StatusMsg = string.Empty;
             m_Selected  = null;
+            m_TreeView  = null; // rebuild columns next parse (timestamp column may appear/disappear)
         }
 
         public override string GetStatusMessage() => m_StatusMsg;
@@ -177,13 +196,24 @@ namespace BuildLogAnalyzer.Editor
             const string k_TotalMarker     = "Total: ";
             const string k_SecondsMarker   = " seconds";
             const string k_InitiatedMarker = "- Initiated by ";
+            const string k_StartImporting  = "Start importing ";
             const int    k_MaxDetailLines  = 200;
+
+            // The refresh summary line is printed at the *end* of the refresh, after the imports
+            // it triggered. So the block spans from the first import since the previous refresh
+            // (start) to this summary line (end).
+            int firstImportLine = -1;
 
             for (int i = 0; i < lines.Length; i++)
             {
                 string raw        = lines[i];
                 int    refreshIdx = raw.IndexOf(k_RefreshMarker, StringComparison.Ordinal);
-                if (refreshIdx < 0) continue;
+                if (refreshIdx < 0)
+                {
+                    if (firstImportLine < 0 && raw.IndexOf(k_StartImporting, StringComparison.Ordinal) >= 0)
+                        firstImportLine = i + 1;
+                    continue;
+                }
 
                 int guidStart = refreshIdx + k_RefreshMarker.Length;
                 int guidEnd   = raw.IndexOf(')', guidStart);
@@ -221,13 +251,15 @@ namespace BuildLogAnalyzer.Editor
 
                 m_Entries.Add(new RefreshEntry
                 {
-                    LineNumber    = i + 1,
-                    LineNumberEnd = i + 1 + details.Count,
+                    LineNumber    = firstImportLine > 0 ? firstImportLine : i + 1,
+                    LineNumberEnd = i + 1, // the "Asset Pipeline Refresh (id=…)" summary line
                     Guid          = guid,
                     TotalTimeSec  = timeSec,
                     Reason        = reason,
                     DetailLines   = details,
                 });
+
+                firstImportLine = -1; // begin a fresh window for the next refresh
             }
 
             ApplyFilter();

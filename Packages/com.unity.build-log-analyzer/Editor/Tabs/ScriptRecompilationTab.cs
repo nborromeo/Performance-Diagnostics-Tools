@@ -13,10 +13,11 @@ namespace BuildLogAnalyzer.Editor
 
         sealed class TundraSuccess
         {
-            public int   LineNumber;
-            public float TimeSec;
-            public int   ItemsUpdated;
-            public int   ItemsEvaluated;
+            public int    LineNumber;
+            public float  TimeSec;
+            public int    ItemsUpdated;
+            public int    ItemsEvaluated;
+            public bool   IsIntermediate; // true for "Tundra requires additional run", false for "Tundra build success"
         }
 
         sealed class RecompilationEntry
@@ -66,6 +67,7 @@ namespace BuildLogAnalyzer.Editor
                         0 => a.LineNumber.CompareTo(b.LineNumber),
                         1 => string.Compare(a.ReasonsDisplay, b.ReasonsDisplay, StringComparison.OrdinalIgnoreCase),
                         2 => a.TotalTimeSec.CompareTo(b.TotalTimeSec),
+                        3 => a.LineNumber.CompareTo(b.LineNumber), // chronological == line order; survives midnight rollover
                         _ => 0
                     };
                     return asc ? cmp : -cmp;
@@ -89,9 +91,22 @@ namespace BuildLogAnalyzer.Editor
                 {
                     var rect = args.GetCellRect(i);
                     CenterRectUsingSingleLineHeight(ref rect);
-                    string text = args.GetColumn(i) switch
+                    int col = args.GetColumn(i);
+
+                    if (col == 0)
                     {
-                        0 => e.LineNumberEnd > 0 ? $"{e.LineNumber}–{e.LineNumberEnd}" : e.LineNumber.ToString(),
+                        LogFileNavigator.DrawLineCell(rect, e.LineNumber, e.LineNumberEnd);
+                        continue;
+                    }
+
+                    if (col == 3)
+                    {
+                        LogFileNavigator.DrawTimestampCell(rect, e.LineNumber, e.LineNumberEnd);
+                        continue;
+                    }
+
+                    string text = col switch
+                    {
                         1 => e.ReasonsDisplay,
                         2 => e.TotalTimeSec > 0f ? e.TotalTimeSec.ToString("F2") : "—",
                         _ => string.Empty
@@ -102,12 +117,16 @@ namespace BuildLogAnalyzer.Editor
 
             public static MultiColumnHeaderState CreateDefaultHeaderState()
             {
-                var state = new MultiColumnHeaderState(new[]
+                var columns = new List<MultiColumnHeaderState.Column>
                 {
-                    new MultiColumnHeaderState.Column { headerContent = new GUIContent("Line",           "Log file line range of this recompilation block (start–end at last Tundra success)"),               width = 90,  minWidth = 55,  autoResize = false, canSort = true, allowToggleVisibility = false },
+                    new MultiColumnHeaderState.Column { headerContent = new GUIContent("Line",           "Log file line range of this recompilation block (start–end at last Tundra run)"),                   width = 90,  minWidth = 55,  autoResize = false, canSort = true, allowToggleVisibility = false },
                     new MultiColumnHeaderState.Column { headerContent = new GUIContent("Reasons",        "Reasons that triggered this script compilation"),                                                    width = 380, minWidth = 100, autoResize = true,  canSort = true, allowToggleVisibility = false },
-                    new MultiColumnHeaderState.Column { headerContent = new GUIContent("Total Time (s)", "Cumulative time of all Tundra build success entries associated with this recompilation"),           width = 100, minWidth = 60,  autoResize = false, canSort = true },
-                });
+                    new MultiColumnHeaderState.Column { headerContent = new GUIContent("Total Time (s)", "Cumulative time of all Tundra build success and intermediate 'requires additional run' entries associated with this recompilation"), width = 100, minWidth = 60,  autoResize = false, canSort = true },
+                };
+                if (LogTimestamps.HasTimestamps)
+                    columns.Add(new MultiColumnHeaderState.Column { headerContent = new GUIContent("Timestamp", $"Log timestamp at the start line ({LogTimestamps.DetectedFormatName}); hover a range row for start → end"), width = 160, minWidth = 70, autoResize = false, canSort = true, allowToggleVisibility = true });
+
+                var state = new MultiColumnHeaderState(columns.ToArray());
                 state.sortedColumnIndex          = 0;
                 state.columns[0].sortedAscending = true;
                 return state;
@@ -136,6 +155,11 @@ namespace BuildLogAnalyzer.Editor
             @"\*\*\* Tundra build success \(([\d.]+) seconds\),\s*(\d+) items updated,\s*(\d+) evaluated",
             RegexOptions.Compiled);
 
+        // "*** Tundra requires additional run (224.52 seconds - 0:03:44), 1842 items updated, 2901 evaluated"
+        static readonly Regex s_TundraAdditionalRunRx = new Regex(
+            @"\*\*\* Tundra requires additional run \(([\d.]+) seconds(?:\s*-\s*[\d:]+)?\),\s*(\d+) items updated,\s*(\d+) evaluated",
+            RegexOptions.Compiled);
+
         // ── BuildLogAnalyzerTab ───────────────────────────────────────────────
 
         public override string TabName => "Script Recompilations";
@@ -148,6 +172,7 @@ namespace BuildLogAnalyzer.Editor
             m_FilteredEntries.Clear();
             m_StatusMsg = string.Empty;
             m_Selected  = null;
+            m_TreeView  = null; // rebuild columns next parse (timestamp column may appear/disappear)
         }
 
         public override string GetStatusMessage() => m_StatusMsg;
@@ -188,11 +213,25 @@ namespace BuildLogAnalyzer.Editor
                     }
                 }
 
-                // Associate Tundra success with the most recent compilation.
-                if (current != null && raw.IndexOf("Tundra build success", StringComparison.Ordinal) >= 0)
+                // Associate Tundra build success/additional-run entries with the most recent compilation.
+                // "Tundra requires additional run" appears for each intermediate pass Tundra needs
+                // (e.g. when generated code triggers another build round) before the final
+                // "Tundra build success" — both consume real compile time and must be counted.
+                if (current != null)
                 {
-                    var m = s_TundraRx.Match(raw);
-                    if (m.Success
+                    bool isIntermediate = false;
+                    Match m = null;
+                    if (raw.IndexOf("Tundra build success", StringComparison.Ordinal) >= 0)
+                    {
+                        m = s_TundraRx.Match(raw);
+                    }
+                    else if (raw.IndexOf("Tundra requires additional run", StringComparison.Ordinal) >= 0)
+                    {
+                        m               = s_TundraAdditionalRunRx.Match(raw);
+                        isIntermediate  = true;
+                    }
+
+                    if (m != null && m.Success
                         && float.TryParse(m.Groups[1].Value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float sec)
                         && int.TryParse(m.Groups[2].Value, out int updated)
                         && int.TryParse(m.Groups[3].Value, out int evaluated))
@@ -203,6 +242,7 @@ namespace BuildLogAnalyzer.Editor
                             TimeSec        = sec,
                             ItemsUpdated   = updated,
                             ItemsEvaluated = evaluated,
+                            IsIntermediate = isIntermediate,
                         });
                         current.TotalTimeSec  += sec;
                         current.LineNumberEnd  = lineIdx + 1;
@@ -277,7 +317,7 @@ namespace BuildLogAnalyzer.Editor
             // Header
             string headerText = m_Selected.TundraBuilds.Count == 0
                 ? $"Line {m_Selected.LineNumber}  —  no Tundra builds captured"
-                : $"Line {m_Selected.LineNumber}  —  {m_Selected.TundraBuilds.Count} Tundra build(s)  |  Total: {m_Selected.TotalTimeSec:F2}s";
+                : $"Line {m_Selected.LineNumber}  —  {m_Selected.TundraBuilds.Count} Tundra run(s)  |  Total: {m_Selected.TotalTimeSec:F2}s";
             GUI.Label(new Rect(0, y, contentRect.width, EditorGUIUtility.singleLineHeight), headerText, EditorStyles.boldLabel);
             y += lh;
 
@@ -300,8 +340,9 @@ namespace BuildLogAnalyzer.Editor
             {
                 foreach (var t in m_Selected.TundraBuilds)
                 {
+                    string kind = t.IsIntermediate ? "additional run" : "build success";
                     GUI.Label(new Rect(0, y, contentRect.width, EditorGUIUtility.singleLineHeight),
-                        $"  Line {t.LineNumber}  —  {t.TimeSec:F2}s  ({t.ItemsUpdated} updated, {t.ItemsEvaluated} evaluated)",
+                        $"  Line {t.LineNumber}  —  {kind}: {t.TimeSec:F2}s  ({t.ItemsUpdated} updated, {t.ItemsEvaluated} evaluated)",
                         EditorStyles.miniLabel);
                     y += lh;
                 }

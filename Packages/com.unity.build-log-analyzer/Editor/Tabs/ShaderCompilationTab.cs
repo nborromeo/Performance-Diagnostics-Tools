@@ -124,6 +124,7 @@ namespace BuildLogAnalyzer.Editor
                         12 => a.LocalCacheHits.CompareTo(b.LocalCacheHits),
                         13 => a.RemoteCacheHits.CompareTo(b.RemoteCacheHits),
                         14 => a.CompiledCount.CompareTo(b.CompiledCount),
+                        15 => a.LineNumber.CompareTo(b.LineNumber), // chronological == line order; survives midnight rollover
                         _  => 0
                     };
                     return asc ? cmp : -cmp;
@@ -180,6 +181,18 @@ namespace BuildLogAnalyzer.Editor
                     CenterRectUsingSingleLineHeight(ref rect);
                     int col = args.GetColumn(i);
 
+                    if (col == 0)
+                    {
+                        LogFileNavigator.DrawLineCell(rect, e.LineNumber, e.LineNumberEnd);
+                        continue;
+                    }
+
+                    if (col == 15)
+                    {
+                        LogFileNavigator.DrawTimestampCell(rect, e.LineNumber, e.LineNumberEnd);
+                        continue;
+                    }
+
                     if (col == 1)
                     {
                         int wc = e.Warnings?.Count ?? 0;
@@ -193,7 +206,6 @@ namespace BuildLogAnalyzer.Editor
 
                     string text = col switch
                     {
-                        0  => e.LineNumberEnd > 0 ? $"{e.LineNumber}–{e.LineNumberEnd}" : e.LineNumber.ToString(),
                         2  => e.ShaderName,
                         3  => e.PassName,
                         4  => e.ShaderType,
@@ -215,7 +227,7 @@ namespace BuildLogAnalyzer.Editor
 
             public static MultiColumnHeaderState CreateDefaultHeaderState()
             {
-                var state = new MultiColumnHeaderState(new[]
+                var columns = new List<MultiColumnHeaderState.Column>
                 {
                     new MultiColumnHeaderState.Column { headerContent = new GUIContent("Line",           "Log file line range for this shader pass (start–end)"),                                                         width = 90,  minWidth = 55,  autoResize = false, canSort = true, allowToggleVisibility = false },
                     new MultiColumnHeaderState.Column { headerContent = new GUIContent("⚠",              "Number of warnings detected for this entry"),                                                                   width = 30,  minWidth = 25,  autoResize = false, canSort = true, allowToggleVisibility = true  },
@@ -232,7 +244,11 @@ namespace BuildLogAnalyzer.Editor
                     new MultiColumnHeaderState.Column { headerContent = new GUIContent("Local Cache",       "Variants served from local cache: hit count and CPU time spent on cache lookups"),                           width = 90,  minWidth = 50,  autoResize = false, canSort = true },
                     new MultiColumnHeaderState.Column { headerContent = new GUIContent("Remote Cache",      "Variants served from remote cache: hit count and CPU time spent on remote cache lookups"),                   width = 90,  minWidth = 50,  autoResize = false, canSort = true },
                     new MultiColumnHeaderState.Column { headerContent = new GUIContent("Compiled (CPU)",    "Variants compiled from source: count and cumulative CPU time across all compiler threads (can exceed wall time when parallel compilation is active)"), width = 110, minWidth = 60, autoResize = false, canSort = true },
-                });
+                };
+                if (LogTimestamps.HasTimestamps)
+                    columns.Add(new MultiColumnHeaderState.Column { headerContent = new GUIContent("Timestamp", $"Log timestamp at the start line ({LogTimestamps.DetectedFormatName}); hover a range row for start → end"), width = 160, minWidth = 70, autoResize = false, canSort = true, allowToggleVisibility = true });
+
+                var state = new MultiColumnHeaderState(columns.ToArray());
                 state.sortedColumnIndex          = 6;
                 state.columns[6].sortedAscending = false;
                 return state;
@@ -297,6 +313,7 @@ namespace BuildLogAnalyzer.Editor
             m_FilteredEntries.Clear();
             m_StatusMsg = string.Empty;
             m_Selected  = null;
+            m_TreeView  = null; // rebuild columns next parse (timestamp column may appear/disappear)
         }
 
         public override string GetStatusMessage() => m_StatusMsg;
