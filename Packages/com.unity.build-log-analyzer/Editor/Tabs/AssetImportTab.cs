@@ -58,6 +58,17 @@ namespace BuildLogAnalyzer.Editor
                 }
             }
 
+            public void SelectByLine(int line)
+            {
+                for (int i = 0; i < m_Source.Count; i++)
+                {
+                    if (m_Source[i].LineNumber != line) continue;
+                    SetSelection(new List<int> { i });
+                    FrameItem(i);
+                    return;
+                }
+            }
+
             void SortSource()
             {
                 int col = multiColumnHeader.sortedColumnIndex;
@@ -229,6 +240,34 @@ namespace BuildLogAnalyzer.Editor
         }
 
         public override string GetStatusMessage() => m_StatusMsg;
+
+        public override IEnumerable<SummaryRow> GetSummaryRows()
+        {
+            foreach (var e in m_Entries)
+                yield return new SummaryRow
+                {
+                    LineNumber    = e.LineNumber,
+                    LineNumberEnd = e.LineNumberEnd,
+                    Name          = e.AssetName,
+                    DurationSec   = e.TotalTimeSec,
+                    SourceTab     = this,
+                };
+        }
+
+        public override void SelectSummaryRow(int lineNumber)
+        {
+            AssetImportEntry match = null;
+            foreach (var e in m_Entries)
+                if (e.LineNumber == lineNumber) { match = e; break; }
+            if (match == null) return;
+
+            if (!m_FilteredEntries.Contains(match)) { m_Filter = string.Empty; ApplyFilter(); }
+
+            EnsureTreeView();
+            m_TreeView.SelectByLine(lineNumber);
+            m_Selected = match;
+            m_Window?.Repaint();
+        }
 
         public override void ParseLines(string[] lines)
         {

@@ -14,6 +14,7 @@ namespace BuildLogAnalyzer.Editor
         string m_ErrorMsg = string.Empty;
 
         BuildLogAnalyzerTab[] m_Tabs;
+        SummaryTab            m_SummaryTab;
 
         [MenuItem("Window/Analysis/Build Log Analyzer")]
         static void Open() => GetWindow<BuildLogAnalyzerWindow>("Build Log Analyzer");
@@ -27,12 +28,13 @@ namespace BuildLogAnalyzer.Editor
             var refreshTab      = new AssetDatabaseRefreshTab();
             var recompileTab    = new ScriptRecompilationTab();
             var addressablesTab = new AddressablesBuildTab();
+            m_SummaryTab        = new SummaryTab();
 
-            m_Tabs = new BuildLogAnalyzerTab[] { shaderTab, importTab, refreshTab, recompileTab, addressablesTab };
+            m_Tabs = new BuildLogAnalyzerTab[] { m_SummaryTab, shaderTab, importTab, refreshTab, recompileTab, addressablesTab };
 
             // Wire up cross-tab navigation: import ↔ refresh tabs link to each other.
-            int importTabIndex  = 1;
-            int refreshTabIndex = 2;
+            int importTabIndex  = Array.IndexOf(m_Tabs, importTab);
+            int refreshTabIndex = Array.IndexOf(m_Tabs, refreshTab);
             importTab.SetRefreshTabNavigation(refreshTab, () =>
             {
                 m_ActiveTab = refreshTabIndex;
@@ -41,6 +43,17 @@ namespace BuildLogAnalyzer.Editor
             refreshTab.SetImportTabNavigation(importTab, () =>
             {
                 m_ActiveTab = importTabIndex;
+                Repaint();
+            });
+
+            // Timeline tab aggregates every other tab and can jump back into any of them.
+            var summarySourceTabs = new BuildLogAnalyzerTab[] { shaderTab, importTab, refreshTab, recompileTab, addressablesTab };
+            var summarySourceIndices = new int[summarySourceTabs.Length];
+            for (int i = 0; i < summarySourceTabs.Length; i++)
+                summarySourceIndices[i] = Array.IndexOf(m_Tabs, summarySourceTabs[i]);
+            m_SummaryTab.SetSourceTabs(summarySourceTabs, summarySourceIndices, tabIndex =>
+            {
+                m_ActiveTab = tabIndex;
                 Repaint();
             });
 
@@ -123,10 +136,13 @@ namespace BuildLogAnalyzer.Editor
             {
                 EditorUtility.DisplayProgressBar("Build Log Analyzer", "Parsing log file…", 0f);
                 foreach (var tab in m_Tabs)
-                {
                     tab.Clear();
-                    tab.ParseLines(lines);
-                }
+
+                // Timeline tab aggregates the other tabs' entries, so it must parse last.
+                foreach (var tab in m_Tabs)
+                    if (tab != m_SummaryTab)
+                        tab.ParseLines(lines);
+                m_SummaryTab.ParseLines(lines);
             }
             finally
             {

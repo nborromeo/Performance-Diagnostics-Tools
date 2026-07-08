@@ -38,6 +38,17 @@ namespace BuildLogAnalyzer.Editor
                 Reload();
             }
 
+            public void SelectByLine(int line)
+            {
+                for (int i = 0; i < m_Source.Count; i++)
+                {
+                    if (m_Source[i].LineNumber != line) continue;
+                    SetSelection(new List<int> { i });
+                    FrameItem(i);
+                    return;
+                }
+            }
+
             void SortSource()
             {
                 int col = multiColumnHeader.sortedColumnIndex;
@@ -120,10 +131,33 @@ namespace BuildLogAnalyzer.Editor
         string              m_ParseExtra = string.Empty;
         AddressablesTreeView m_TreeView;
         TreeViewState<int>  m_TreeState;
+        EditorWindow        m_Window;
 
         // ── BuildLogAnalyzerTab ───────────────────────────────────────────────
 
         public override string TabName => "Addressables Builds";
+
+        public override void OnEnable(EditorWindow window) => m_Window = window;
+
+        public override IEnumerable<SummaryRow> GetSummaryRows()
+        {
+            foreach (var e in m_Entries)
+                yield return new SummaryRow
+                {
+                    LineNumber    = e.LineNumber,
+                    LineNumberEnd = e.LineNumberEnd,
+                    Name          = "Addressables Build",
+                    DurationSec   = e.DurationSec,
+                    SourceTab     = this,
+                };
+        }
+
+        public override void SelectSummaryRow(int lineNumber)
+        {
+            EnsureTreeView();
+            m_TreeView.SelectByLine(lineNumber);
+            m_Window?.Repaint();
+        }
 
         public override void Clear()
         {
