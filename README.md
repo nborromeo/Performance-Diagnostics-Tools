@@ -352,6 +352,8 @@ Use the **Filter** field to narrow by name or source tab. This tab is populated 
 
 ## Import Activity Viewer
 
+<img width="1189" height="330" alt="image" src="https://github.com/user-attachments/assets/dd7ee7d1-ce91-4359-a67d-70da119a84bc" />
+
 A companion to Unity's built-in Import Activity window. Instead of a flat list of every asset that was reimported, this groups them by cascade: each row on the left is a root asset that was imported for its own reason (edited, VCS update, etc.), and selecting it shows the full chain of dependents it dragged along on the right.
 
 **Open:** `Window > Analysis > Import Activity Viewer`
