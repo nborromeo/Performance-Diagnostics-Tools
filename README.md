@@ -8,133 +8,11 @@ A collection of Unity Editor tools for diagnosing rendering and physics performa
 
 <img width="1336" height="456" alt="image" src="https://github.com/user-attachments/assets/7a57c3ef-4553-4b46-b09b-163ebb6733d0" />
 
-A unified window that runs multiple diagnostic detectors simultaneously and collects all findings into a single, sortable list. Each detector can be toggled and configured independently from the toolbar.
+A unified window that runs multiple diagnostic detectors — Canvas Invalidation and Static Rebuild — simultaneously and collects all findings into a single, sortable list.
 
 **Open:** `Window > Analysis > Performance Diagnostics`
 
-### Window layout
-
-The toolbar at the top contains a section for each active detector — with its category toggle, primary action controls, and a settings (⚙) popup. The total issue count is shown on the right. Below the toolbar a split view shows the issue list on the left and a details panel on the right.
-
-The issue list has the following columns:
-
-| Column | Meaning |
-|--------|---------|
-| **Type** | Which detector produced the entry, and the specific event type within that detector |
-| **Frame** | The frame number when the issue was captured |
-| **Object** | The name of the GameObject involved |
-| **Context** | Additional context — depends on the detector (e.g. Canvas name, break reason) |
-| **Count** | How many times the same issue was recorded (repeated events fold into one row) |
-
-Rows with a yellow background were captured in Play Mode; blue background rows were captured in Edit Mode. Click any row to open the details panel on the right.
-
----
-
-### Canvas Invalidation detector
-
-Logs every call that adds an element to the Canvas layout or graphic rebuild queues, capturing the full call stack at the moment of invalidation. Use this to find what code is causing unnecessary rebuilds every frame.
-
-#### How it works
-
-The detector patches methods at the native code level using a 14-byte JMP detour (Windows, macOS, and Linux Editor builds are supported). When any patched method is called, a hook captures the current stack trace and stores it.
-
-**CanvasUpdateRegistry** — patched to catch managed layout and graphic rebuild registrations:
-- `RegisterCanvasElementForLayoutRebuild`
-- `TryRegisterCanvasElementForLayoutRebuild`
-- `RegisterCanvasElementForGraphicRebuild`
-- `TryRegisterCanvasElementForGraphicRebuild`
-
-**CanvasRenderer** — patched to catch native setter calls that bypass `CanvasUpdateRegistry` entirely (e.g. `SetColor`, `SetMesh`). These appear as **CR** (orange) entries in the list. CanvasRenderer events that are a downstream consequence of a managed Graphic/Layout invalidation already captured in the same frame are suppressed automatically to avoid duplicate noise.
-
-**Graphic tween methods** — `CrossFadeColor` (all overloads) and `CrossFadeAlpha` are patched to attribute per-frame tween updates to their originating call site rather than to the tween engine internals.
-
-The **Traces ON / Traces OFF** indicator in the toolbar shows whether patching succeeded. If it shows OFF, entries are still captured but without call stacks.
-
-#### Toolbar controls
-
-| Control | Description |
-|---------|-------------|
-| **Canvas Invalidation toggle** | Show or hide Canvas Invalidation entries in the list |
-| **Clear** | Removes all captured Canvas Invalidation entries |
-| **Pause / Resume** | Temporarily stops capturing new entries |
-| **Layout / Graphic / CR** | Toggle filters for each invalidation sub-type |
-| **Max** | Maximum number of entries to keep (oldest are trimmed) |
-| **Traces ON/OFF** | Green = patching active, Orange = patching inactive |
-
-#### Details panel
-
-Selecting a Canvas Invalidation entry opens its details:
-
-- **Object** — full hierarchy path, with Ping and Select buttons to locate it in the scene
-- **Invalidation Details** — type, frame, time, mode, and dirty flags
-- **Canvas** — Canvas name and render mode
-- **Components** — all components on the GameObject at capture time
-- **Call-site Stack Trace** — the full managed call stack from the moment the element was queued for rebuild. Stack frames that resolve to a source file are rendered as clickable links — clicking opens the file at the correct line in your script editor. When multiple unique call stacks produced the same invalidation (folded rows), use the **◀ ▶** arrows to page through each distinct trace. Use **Copy to Clipboard** to paste the current trace into an editor or bug report.
-
-#### Common findings
-
-- A stack trace showing `Graphic.SetVerticesDirty` or `Graphic.SetMaterialDirty` called from an `Update` or animation callback every frame means a graphic is being dirtied continuously — the most common cause of constant rebuilds.
-- Layout invalidations triggered by `LayoutRebuilder.MarkLayoutForRebuild` on stable objects usually point to a script calling `SetActive`, changing a `RectTransform`, or modifying layout component properties unnecessarily.
-- If many objects share the same stack trace, fix it once at the call site to eliminate all of them.
-- **CR entries with a high Count** indicate a CanvasRenderer property (color, mesh, etc.) being set every frame from script. These bypass the managed rebuild path and won't appear as Layout or Graphic entries, making them easy to miss without this tool.
-- **Multiple unique traces on a single folded row** (shown via the ◀ ▶ pager) means the same object is being invalidated by more than one code path in the same frame — each trace is a separate fix target.
-
----
-
-### Static Rebuild detector
-
-Detects static colliders — GameObjects with a `Collider` but no `Rigidbody` in their parent chain — that are causing physics broadphase rebuilds. Any of the following events on a static collider forces Unity to rebuild the broadphase and tank physics performance:
-
-- The GameObject moved, rotated, or scaled
-- The GameObject was activated or deactivated
-- A `Collider` component was added or removed
-- A `Collider` component was enabled or disabled
-- The GameObject was created or destroyed
-
-#### How it works
-
-The detector snapshots the world transform and collider state of every static collider GO in the scene, waits a configurable interval, then diffs the two snapshots. Only GOs that have a `Collider` somewhere in their subtree and no `Rigidbody` anywhere in their parent chain are considered.
-
-#### Toolbar controls
-
-| Control | Description |
-|---------|-------------|
-| **Static Rebuild toggle** | Show or hide Static Rebuild entries in the list |
-| **Interval (s)** | Seconds between the two snapshots (0.05 – 5 s) |
-| **Continuous** | When enabled, keeps re-snapshotting and updating results live; **Start / Stop** replaces **Capture** |
-| **Limit Iterations** | Only available in Continuous mode. Caps the number of captures before auto-stopping |
-| **Max Iterations** | How many captures to run before stopping (1 – 1000) |
-| **Capture / Start** | Takes the first snapshot and begins waiting |
-| **Stop** | Stops a running continuous capture; shows current progress as `Stop (N / Max)` |
-| **Clear** | Removes all accumulated Static Rebuild results |
-
-#### Reading the results
-
-Results appear in the shared issue list — one row per unique event per GameObject, accumulating across captures. Click any row to ping and select the object in the Hierarchy. Destroyed GameObjects appear in grey and cannot be selected.
-
-The **Type** column shows the specific event that was detected:
-
-| Type value | Meaning |
-|-----------|---------|
-| **Move** | Transform change detected (position, rotation, or scale) |
-| **C+** | Collider component was added |
-| **C-** | Collider component was destroyed |
-| **C▲** | Collider component was enabled |
-| **C▼** | Collider component was disabled |
-| **Act** | `activeInHierarchy` flipped from false → true |
-| **Deact** | `activeInHierarchy` flipped from true → false |
-| **Born** | GO did not exist in the previous snapshot (was spawned) |
-| **Dead** | GO was present in the previous snapshot but is now gone (was destroyed) |
-
-All column headers and cells show a tooltip with a plain-language description on hover.
-
----
-
-### Requirements
-
-- Unity 6000.0 or later
-- Canvas Invalidation detector: `com.unity.ugui` 2.0.0 or later; native patching requires Windows x64, macOS x64/arm64, or Linux x64 Editor (entries are still captured without stack traces on other platforms)
-- Static Rebuild detector: must be used in **Play Mode** — transforms must be live
+📄 [Full documentation](docs/performance-diagnostics.md)
 
 ---
 
@@ -146,53 +24,7 @@ Analyzes a shader's keyword declarations and the materials in the project that r
 
 **Open:** `Window > Analysis > Shader Variant Analyzer`
 
-### Workflow
-
-1. Open the tool window.
-2. Drag a shader asset into the **Shader** field in the toolbar (or use the object picker).
-3. Click **Analyze**. The tool parses the shader's source files (including resolved `#include` chains) and scans all materials in the project.
-4. Use the three tabs to explore the results.
-
-### Tab 0 — Shader Feature Keywords
-
-Lists every keyword declared with `#pragma shader_feature` (or `shader_feature_local`) found in the shader source. These keywords are per-material — only the keywords enabled on materials that actually reference this shader generate variants.
-
-| Column | Meaning |
-|--------|---------|
-| **Keyword** | The keyword name, as it appears in the pragma |
-| **Permutations** | How many compiled permutations include this keyword in the enabled state |
-| **Materials** | How many project materials have this keyword enabled |
-
-Clicking a keyword row expands a detail panel listing every material that has the keyword enabled, with ping/select buttons. The **Keyword** column also shows the source file and line number where the `#pragma` was found — clicking that link opens the file at that line in your script editor. Built-in keywords not found in parsed source are marked accordingly.
-
-Click any column header to sort by that field.
-
-### Tab 1 — Multi-Compile Keywords
-
-Lists every `#pragma multi_compile` (or `multi_compile_local`) set found in the shader source. Unlike `shader_feature`, `multi_compile` keywords are always compiled in full regardless of which materials exist, so a single set with many options has a large multiplying effect on total variant count.
-
-| Column | Meaning |
-|--------|---------|
-| **Keyword set** | All options in the pragma, e.g. `FOG_ON \| FOG_EXP2` |
-| **Options** | The number of options in the set (each option multiplies the total variant count) |
-
-Built-in keyword sets (those not found in parsed source files) are flagged separately. The source file and line number are shown for sets that come from project or package source. Click any column header to sort.
-
-### Tab 2 — Permutations
-
-Lists every unique permutation that exists across all materials in the project referencing this shader. Each row represents one unique combination of enabled `shader_feature` keywords found on at least one material.
-
-| Column | Meaning |
-|--------|---------|
-| **Active Shader Feature Keywords** | The set of enabled keywords that defines this permutation. Rows with no enabled keywords are labeled `(base — no shader_feature keywords)` |
-| **Materials** | How many project materials use exactly this permutation |
-
-Selecting a row expands a detail panel listing every material in that permutation, with ping/select buttons. This tab is the fastest way to identify permutations shared across many materials (good consolidation candidates) and permutations used by only one material (potential dead weight if the variant is rarely seen at runtime).
-
-### Requirements
-
-- Unity 6000.0 or later
-- The shader must be a project asset (not a built-in shader) for source parsing and material scanning to work
+📄 [Full documentation](docs/shader-variant-analyzer.md)
 
 ---
 
@@ -200,109 +32,11 @@ Selecting a row expands a detail panel listing every material in that permutatio
 
 <img width="1410" height="725" alt="image" src="https://github.com/user-attachments/assets/3b0a3399-f75b-4c0a-b812-226b92014a3f" />
 
-Parses a Unity Editor log file and surfaces timing and diagnostic data across multiple categories in a set of sortable tabs. Also generates a Chrome-compatible trace file so you can load the entire build timeline into `chrome://tracing` or Perfetto.
+Parses a Unity Editor log file and surfaces timing and diagnostic data across multiple categories in a set of sortable tabs. Also generates a Chrome-compatible trace file for `chrome://tracing` or Perfetto.
 
 **Open:** `Window > Analysis > Build Log Analyzer`
 
-### Workflow
-
-1. Click **Browse…** to pick a `.log` or `.txt` Editor log file, or paste its path directly into the text field.
-2. Click **Parse** to scan the file and populate all tabs at once.
-3. Switch between tabs to explore each category. Use the **Filter** field (where available) to narrow results by name (case-insensitive substring match). Click **✕** to clear.
-4. Click any column header to sort. Click a row to ping and select the corresponding asset in the Project window (where applicable).
-
-Optionally, click **Generate Trace** to produce a `buildLogTrace.json` file at the root of your project. Open this file in `chrome://tracing` or [ui.perfetto.dev](https://ui.perfetto.dev) to view the full build timeline as a flame graph.
-
-The parser ignores any log-line prefix (timestamps, thread IDs, `[Step N/M]` CI brackets, etc.), so logs produced by the Editor, CI pipelines, or third-party log decorators are all handled correctly.
-
-### Tab — Shader Compilation
-
-Shows the stripping and compilation data for every shader pass block found in the log. Use it to find which shaders took the longest to compile, how many variants survived each stripping stage, and how much work was served from cache versus compiled from source.
-
-| Column | Meaning |
-|--------|---------|
-| **#** | Parse order — reflects the order in which the blocks appeared in the log |
-| **Shader** | Shader name as reported by Unity (e.g. `Universal Render Pipeline/Unlit`) |
-| **Pass** | Pass name from the `Pass "…"` declaration; empty for unnamed passes |
-| **Stage** | Shader stage: Vertex, Fragment, Geometry, Hull, or Domain |
-| **API** | Graphics API this compilation targeted (e.g. `Metal`, `Vulkan`, `d3d11`) |
-| **Full Space** | Total theoretical variant count before any stripping |
-| **After Settings** | Variants remaining after Unity's graphics settings filter |
-| **After Built-in** | Variants remaining after Unity's built-in stripping pass |
-| **After Scriptable** | Variants remaining after all `IShaderVariantStripper` scriptable strippers |
-| **Strip Time (s)** | Wall-clock seconds reported for the stripping phase |
-| **Compile Time (s)** | Wall-clock seconds for the full compilation of this pass |
-| **Local Cache** | Local cache hits and the CPU time spent on those lookups |
-| **Remote Cache** | Remote cache hits and the CPU time spent on those lookups |
-| **Compiled (CPU)** | Variants compiled from source and the cumulative CPU time across all compiler threads (can exceed wall time when parallel compilation is active) |
-
-The table defaults to **Full Space descending** so the heaviest shaders appear first.
-
-- A large gap between **Full Space** and **After Scriptable** means your strippers are doing useful work. If the gap is small, consider writing or enabling a `IShaderVariantStripper`.
-- High **Compiled (CPU)** time with low cache hits means variants are being compiled from scratch on every build. Warming the local or remote cache (incremental builds, build cache server) will speed up subsequent builds.
-- The **Strip Time** and **Compile Time** columns together show whether the bottleneck is in the stripping phase or the actual GPU compiler invocations.
-
-### Tab — Asset Import
-
-Lists every asset import event found in the log. Defaults to **Time (s) descending** so the most expensive imports appear first. Clicking a row pings and selects the asset in the Project window.
-
-| Column | Meaning |
-|--------|---------|
-| **Line** | Log file line number of the first import of this asset |
-| **Asset** | Asset name (hover to see the full path) |
-| **Time (s)** | Total import time in seconds, summed across all imports of this asset |
-| **Count** | Number of times this asset was imported |
-
-### Tab — Asset DB Refreshes
-
-Lists every Asset Database refresh block found in the log, each identified by its Asset Pipeline refresh GUID.
-
-| Column | Meaning |
-|--------|---------|
-| **Line** | Log file line number |
-| **Refresh ID** | Asset Pipeline refresh GUID |
-| **Time (s)** | Total refresh duration |
-| **Reason** | What initiated the refresh |
-
-Selecting a refresh row and switching to the **Asset Import** tab navigates directly to the imports that occurred within that refresh, and vice versa — the two tabs cross-link to each other.
-
-### Tab — Script Recompilations
-
-Lists every script compilation cycle found in the log, showing what triggered it and how long the Tundra build took.
-
-| Column | Meaning |
-|--------|---------|
-| **Line** | Log file line where the script compilation block started |
-| **Reasons** | What triggered this recompilation (pipe-separated list if multiple reasons) |
-| **Total Time (s)** | Cumulative time of all Tundra build success entries associated with this recompilation |
-
-### Tab — Addressables Builds
-
-Lists every Addressables content build found in the log.
-
-| Column | Meaning |
-|--------|---------|
-| **Line** | Log file line where the Addressables build started |
-| **Duration** | Total build duration as reported in the log |
-
-### Tab — Timeline (Summary)
-
-Aggregates the entries reported by every other tab into a single chronological table, so the order in which processes ran during the build can be seen at a glance without switching tabs.
-
-| Column | Meaning |
-|--------|---------|
-| **Line** | Log file line range of the entry (start–end) |
-| **Tab** | Which tab this entry came from (Shader Compilation, Asset Import, etc.) |
-| **Name** | Entry name — click to jump straight to the entry in its origin tab, with the row selected there |
-| **Time (s)** | Time taken by this process |
-| **Timestamp** | Log timestamp at the start line, only shown when the log has timestamps |
-
-Use the **Filter** field to narrow by name or source tab. This tab is populated last, after every other tab has finished parsing, so it always reflects the full set of results.
-
-### Requirements
-
-- Any Unity Editor log file; no minimum Unity version restriction
-- Chrome trace generation requires a timestamped log (the Editor's default log format includes timestamps)
+📄 [Full documentation](docs/build-log-analyzer.md)
 
 ---
 
@@ -310,45 +44,11 @@ Use the **Filter** field to narrow by name or source tab. This tab is populated 
 
 <img width="1189" height="330" alt="image" src="https://github.com/user-attachments/assets/dd7ee7d1-ce91-4359-a67d-70da119a84bc" />
 
-A companion to Unity's built-in Import Activity window. Instead of a flat list of every asset that was reimported, this groups them by cascade: each row on the left is a root asset that was imported for its own reason (edited, VCS update, etc.), and selecting it shows the full chain of dependents it dragged along on the right.
+A companion to Unity's built-in Import Activity window that groups reimported assets by cascade, so you can see the full chain of dependents each root reimport dragged along.
 
 **Open:** `Window > Analysis > Import Activity Viewer`
 
-### How it works
-
-The tool reads Unity's internal Import Activity data via reflection and diffs each asset's current revision against its previous one to determine what caused the reimport:
-
-- **Primary signal** — Unity's own `ArtifactDifferenceReporter` output (the same "reason for reimport" text the built-in Import Activity window shows) gives a deterministic cause → effect edge per asset.
-- **Fallback signal** — for assets with no previous cached revision to diff against, the tool matches the raw dependency GUID set against other assets reimported in the same batch. This is weaker (it doesn't prove the dependency's hash actually changed) and is only used when the primary signal is unavailable.
-
-Assets with no identified cause become root nodes; everything transitively pulled in under a root forms its cascade tree.
-
-### Workflow
-
-1. Open the tool window. It analyzes the current Import Activity data automatically.
-2. The left pane lists every root asset, with the size and cost of its reimport cascade.
-3. Click a root to see its full dependency chain in the right-hand tree.
-4. Use the search fields above each pane to filter by asset name or path.
-5. Click **Refresh** to re-analyze after new imports have occurred.
-
-### Reading the results
-
-| Column (root list) | Meaning |
-|--------|---------|
-| **Root Asset** | The asset that triggered the cascade |
-| **Assets Affected** | How many dependent assets were reimported as a result |
-| **Total Import Time** | Summed import time across the root and every dependent it dragged along |
-| **Last Import** | Timestamp of the root's most recent import |
-| **Reason** | Why the root was reimported, or that it had no dependents |
-
-Selecting a root expands a tree on the right showing every dependent asset, its own import time and importer, and the reason it was pulled in (either the diff-reported reason or "Dependency of `<parent>`" when inferred from the dependency graph).
-
-Cascades are sorted by **Assets Affected** then **Total Import Time**, so the most expensive reimport chains surface first — a large cascade from a single edited asset is usually the best target for reducing reimport cost.
-
-### Requirements
-
-- Unity 6000.0 or later
-- Relies on Unity's internal Import Activity API via reflection; behavior may vary across Editor versions
+📄 [Full documentation](docs/import-activity-viewer.md)
 
 ---
 
@@ -360,36 +60,4 @@ Visualizes every draw batch produced by a Canvas directly in the Scene and Game 
 
 **Open:** `Window > Analysis > UI Batch Highlighter`
 
-### How it works
-
-The tool captures a single frame of UI Profiler data and maps each batch's element list back to GameObjects in the scene. It then draws colored overlays around the RectTransforms of those elements:
-
-| Color | Meaning |
-|-------|---------|
-| Green | First element in the batch |
-| Red | Last element in the batch |
-| Yellow | All other elements in the batch |
-| Cyan | Stencil push (Mask start) |
-| Magenta | Stencil pop (Mask end) |
-
-### Workflow
-
-1. Open the tool window.
-2. Make sure the Profiler is not already recording — the tool manages recording state automatically.
-3. Click **Capture Frame**. The tool enables the Profiler for one frame, reads the UI batch data, then stops recording.
-4. The batch list appears in the window grouped by Canvas. Each batch entry shows its type, break reason, stencil depth, and element count.
-5. Click any element button to ping and select it in the Hierarchy.
-6. Click **Highlight Batch** to select all elements in that batch at once.
-7. Click **Clear Highlights** to remove the overlays.
-
-### Reading the results
-
-The **break reason** shown on each batch tells you why a new batch had to start (e.g. texture change, material change, stencil depth change). Elements at the boundary — the last element of one batch and the first of the next — are the most likely culprits. Clicking those buttons and inspecting their materials, textures, and mask depth is usually enough to find the issue.
-
-Stencil push/pop entries represent `Mask` components. Each nested mask adds one level of depth and forces a batch break, so reducing mask nesting directly reduces batch count.
-
-### Requirements
-
-- Unity 6000.3 or later
-- The UI Profiler must be available (`com.unity.ugui` installed)
-- Overlays are drawn via `SceneView.duringSceneGui` and `Camera.onPostRender`; both Scene and Game view must be visible for overlays to appear in both
+📄 [Full documentation](docs/ui-batch-highlighter.md)
