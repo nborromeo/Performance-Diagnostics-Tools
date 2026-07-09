@@ -67,6 +67,12 @@
       },
       "url": "https://packages.unity.com"
     },
+    "com.unity.import-activity-viewer": {
+      "version": "file:com.unity.import-activity-viewer",
+      "depth": 0,
+      "source": "embedded",
+      "dependencies": {}
+    },
     "com.unity.inputsystem": {
       "version": "1.19.0",
       "depth": 0,

@@ -1,0 +1,8 @@
+{
+  "name": "com.unity.import-activity-viewer",
+  "version": "0.1.0",
+  "displayName": "Import Activity Viewer",
+  "description": "Editor tool that reads Unity's internal Import Activity data and surfaces the root assets that triggered a reimport cascade, with a drill-down tree of everything each root pulled along with it.",
+  "unity": "6000.0",
+  "type": "tool"
+}
