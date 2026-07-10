@@ -18,6 +18,59 @@ namespace BuildLogAnalyzer.Editor
             public float        TotalTimeSec;
             public string       Reason;
             public List<string> DetailLines = new List<string>();
+            public int          ImportedAssetCount;
+
+            // Populated by FlagDuplicateAssetSetRefreshes() after parsing
+            public List<RowWarning>   Warnings;
+            public List<RefreshEntry> DuplicateAssetSetGroup; // other refreshes that touched the exact same assets
+        }
+
+        // ── Warning analyzers ─────────────────────────────────────────────────
+
+        // Detects refreshes that touched the exact same set of assets as one or more
+        // other refreshes — a common symptom of redundant AssetDatabase.Refresh() calls.
+        static void FlagDuplicateAssetSetRefreshes(List<RefreshEntry> entries, AssetImportTab importTab)
+        {
+            if (importTab == null) return;
+
+            var groups = new Dictionary<string, List<RefreshEntry>>(StringComparer.Ordinal);
+            var pathsByEntry = new Dictionary<RefreshEntry, List<string>>();
+
+            foreach (var e in entries)
+            {
+                var paths = new List<string>();
+                foreach (var (_, path, _) in importTab.GetImportsForRefreshGuid(e.Guid))
+                    paths.Add(path);
+                e.ImportedAssetCount = paths.Count;
+                if (paths.Count == 0) continue;
+
+                paths.Sort(StringComparer.OrdinalIgnoreCase);
+                pathsByEntry[e] = paths;
+
+                string key = string.Join("\n", paths);
+                if (!groups.TryGetValue(key, out var group))
+                    groups[key] = group = new List<RefreshEntry>();
+                group.Add(e);
+            }
+
+            foreach (var group in groups.Values)
+            {
+                if (group.Count < 2) continue;
+
+                foreach (var e in group)
+                {
+                    var others = new List<RefreshEntry>();
+                    foreach (var other in group)
+                        if (other != e) others.Add(other);
+
+                    int assetCount = pathsByEntry[e].Count;
+                    e.DuplicateAssetSetGroup = others;
+                    e.Warnings ??= new List<RowWarning>();
+                    e.Warnings.Add(new RowWarning(
+                        $"This refresh touched the exact same set of {assetCount} asset(s) as {others.Count} other refresh(es) (see links below). " +
+                        "Repeated refreshes over an identical asset set often indicate a redundant or overly broad AssetDatabase.Refresh() call."));
+                }
+            }
         }
 
         sealed class RefreshTreeView : TreeView<int>
@@ -76,10 +129,12 @@ namespace BuildLogAnalyzer.Editor
                     int cmp = col switch
                     {
                         0 => a.LineNumber.CompareTo(b.LineNumber),
-                        1 => string.Compare(a.Guid, b.Guid, StringComparison.Ordinal),
-                        2 => a.TotalTimeSec.CompareTo(b.TotalTimeSec),
-                        3 => string.Compare(a.Reason, b.Reason, StringComparison.OrdinalIgnoreCase),
-                        4 => a.LineNumber.CompareTo(b.LineNumber), // chronological == line order; survives midnight rollover
+                        1 => (a.Warnings?.Count ?? 0).CompareTo(b.Warnings?.Count ?? 0),
+                        2 => string.Compare(a.Guid, b.Guid, StringComparison.Ordinal),
+                        3 => a.TotalTimeSec.CompareTo(b.TotalTimeSec),
+                        4 => string.Compare(a.Reason, b.Reason, StringComparison.OrdinalIgnoreCase),
+                        5 => a.ImportedAssetCount.CompareTo(b.ImportedAssetCount),
+                        6 => a.LineNumber.CompareTo(b.LineNumber), // chronological == line order; survives midnight rollover
                         _ => 0
                     };
                     return asc ? cmp : -cmp;
@@ -111,17 +166,29 @@ namespace BuildLogAnalyzer.Editor
                         continue;
                     }
 
-                    if (col == 4)
+                    if (col == 6)
                     {
                         LogFileNavigator.DrawTimestampCell(rect, e.LineNumber, e.LineNumberEnd);
                         continue;
                     }
 
+                    if (col == 1)
+                    {
+                        int wc = e.Warnings?.Count ?? 0;
+                        if (wc > 0)
+                        {
+                            var icon = EditorGUIUtility.IconContent("console.warnicon.inactive.sml");
+                            EditorGUI.LabelField(rect, new GUIContent($" {wc}", icon.image, $"{wc} warning(s)"));
+                        }
+                        continue;
+                    }
+
                     string text = col switch
                     {
-                        1 => e.Guid,
-                        2 => e.TotalTimeSec.ToString("F3"),
-                        3 => e.Reason,
+                        2 => e.Guid,
+                        3 => e.TotalTimeSec.ToString("F3"),
+                        4 => e.Reason,
+                        5 => e.ImportedAssetCount.ToString(),
                         _ => string.Empty
                     };
                     EditorGUI.LabelField(rect, text);
@@ -133,14 +200,108 @@ namespace BuildLogAnalyzer.Editor
                 var columns = new List<MultiColumnHeaderState.Column>
                 {
                     new MultiColumnHeaderState.Column { headerContent = new GUIContent("Line",       "Line range of this refresh: start = first import since the previous refresh, end = the refresh summary line"),  width = 90,  minWidth = 55, autoResize = false, canSort = true, allowToggleVisibility = false },
+                    new MultiColumnHeaderState.Column { headerContent = new GUIContent("⚠",          "Number of warnings detected for this entry"),                                                                   width = 30,  minWidth = 25, autoResize = false, canSort = true, allowToggleVisibility = true },
                     new MultiColumnHeaderState.Column { headerContent = new GUIContent("Refresh ID", "Asset Pipeline Refresh GUID"),     width = 280, minWidth = 80, autoResize = true,  canSort = true, allowToggleVisibility = false },
                     new MultiColumnHeaderState.Column { headerContent = new GUIContent("Time (s)",   "Total refresh duration"),          width = 75,  minWidth = 50, autoResize = false, canSort = true },
                     new MultiColumnHeaderState.Column { headerContent = new GUIContent("Reason",     "What initiated the refresh"),      width = 220, minWidth = 80, autoResize = false, canSort = true },
+                    new MultiColumnHeaderState.Column { headerContent = new GUIContent("Assets",     "Number of assets imported as part of this refresh"), width = 60, minWidth = 45, autoResize = false, canSort = true },
                 };
                 if (LogTimestamps.HasTimestamps)
                     columns.Add(new MultiColumnHeaderState.Column { headerContent = new GUIContent("Timestamp", $"Log timestamp at the start line ({LogTimestamps.DetectedFormatName}); hover a range row for start → end"), width = 160, minWidth = 70, autoResize = false, canSort = true, allowToggleVisibility = true });
 
                 var state = new MultiColumnHeaderState(columns.ToArray());
+                state.sortedColumnIndex          = 0;
+                state.columns[0].sortedAscending = true;
+                return state;
+            }
+        }
+
+        // ── Imported-assets sub-table ─────────────────────────────────────────
+
+        // Small virtualized table shown in the details panel, replacing a flat loop of
+        // GUI.Button rows — cheap even when a refresh touched thousands of assets.
+        sealed class ImportedAssetsTreeView : TreeView<int>
+        {
+            List<(string name, string path, float totalTime)> m_Source = new List<(string, string, float)>();
+            readonly Action<string> m_OnSelectPath;
+
+            public ImportedAssetsTreeView(TreeViewState<int> state, MultiColumnHeader header, Action<string> onSelectPath) : base(state, header)
+            {
+                rowHeight                     = 18f;
+                showAlternatingRowBackgrounds = true;
+                showBorder                    = true;
+                m_OnSelectPath                = onSelectPath;
+                header.sortingChanged         += _ => { SortSource(); Reload(); };
+                Reload();
+            }
+
+            public void SetSource(List<(string name, string path, float totalTime)> entries)
+            {
+                m_Source = entries;
+                SortSource();
+                Reload();
+            }
+
+            void SortSource()
+            {
+                int col = multiColumnHeader.sortedColumnIndex;
+                if (col < 0 || m_Source.Count == 0) return;
+                bool asc = multiColumnHeader.IsSortedAscending(col);
+                m_Source.Sort((a, b) =>
+                {
+                    int cmp = col switch
+                    {
+                        0 => string.Compare(a.name, b.name, StringComparison.OrdinalIgnoreCase),
+                        1 => a.totalTime.CompareTo(b.totalTime),
+                        _ => 0
+                    };
+                    return asc ? cmp : -cmp;
+                });
+            }
+
+            protected override TreeViewItem<int> BuildRoot()
+            {
+                var root  = new TreeViewItem<int>(-1, -1);
+                var items = new List<TreeViewItem<int>>(m_Source.Count);
+                for (int i = 0; i < m_Source.Count; i++)
+                    items.Add(new TreeViewItem<int>(i, 0, m_Source[i].name));
+                SetupParentsAndChildrenFromDepths(root, items);
+                return root;
+            }
+
+            protected override void SingleClickedItem(int id)
+            {
+                if (id < 0 || id >= m_Source.Count) return;
+                m_OnSelectPath?.Invoke(m_Source[id].path);
+            }
+
+            protected override void RowGUI(RowGUIArgs args)
+            {
+                var e = m_Source[args.item.id];
+                for (int i = 0; i < args.GetNumVisibleColumns(); i++)
+                {
+                    var rect = args.GetCellRect(i);
+                    CenterRectUsingSingleLineHeight(ref rect);
+                    int col = args.GetColumn(i);
+
+                    if (col == 0)
+                    {
+                        EditorGUI.LabelField(rect, new GUIContent(e.name, e.path));
+                        continue;
+                    }
+
+                    EditorGUI.LabelField(rect, e.totalTime.ToString("F4"));
+                }
+            }
+
+            public static MultiColumnHeaderState CreateDefaultHeaderState()
+            {
+                var columns = new[]
+                {
+                    new MultiColumnHeaderState.Column { headerContent = new GUIContent("Asset"),    width = 260, minWidth = 100, autoResize = true,  canSort = true, allowToggleVisibility = false },
+                    new MultiColumnHeaderState.Column { headerContent = new GUIContent("Time (s)"), width = 70,  minWidth = 50,  autoResize = false, canSort = true },
+                };
+                var state = new MultiColumnHeaderState(columns);
                 state.sortedColumnIndex          = 0;
                 state.columns[0].sortedAscending = true;
                 return state;
@@ -161,6 +322,10 @@ namespace BuildLogAnalyzer.Editor
         bool               m_Resizing;
         EditorWindow       m_Window;
 
+        ImportedAssetsTreeView m_ImportsTreeView;
+        TreeViewState<int>     m_ImportsTreeState;
+        List<(string name, string path, float totalTime)> m_SelectedImports = new List<(string, string, float)>();
+
         AssetImportTab     m_ImportTab;
         Action             m_NavigateToImportTab;
 
@@ -177,6 +342,8 @@ namespace BuildLogAnalyzer.Editor
             m_StatusMsg = string.Empty;
             m_Selected  = null;
             m_TreeView  = null; // rebuild columns next parse (timestamp column may appear/disappear)
+            m_SelectedImports.Clear();
+            m_ImportsTreeView?.SetSource(m_SelectedImports);
         }
 
         public override string GetStatusMessage() => m_StatusMsg;
@@ -206,6 +373,7 @@ namespace BuildLogAnalyzer.Editor
             EnsureTreeView();
             m_TreeView.SelectByLine(lineNumber);
             m_Selected = match;
+            RefreshSelectedImports();
             m_Window?.Repaint();
         }
 
@@ -226,6 +394,7 @@ namespace BuildLogAnalyzer.Editor
             m_TreeView.SelectByGuid(guid);
 
             foreach (var e in m_Entries) { if (e.Guid == guid) { m_Selected = e; break; } }
+            RefreshSelectedImports();
             m_Window?.Repaint();
         }
 
@@ -301,6 +470,7 @@ namespace BuildLogAnalyzer.Editor
                 firstImportLine = -1; // begin a fresh window for the next refresh
             }
 
+            FlagDuplicateAssetSetRefreshes(m_Entries, m_ImportTab);
             ApplyFilter();
         }
 
@@ -332,7 +502,7 @@ namespace BuildLogAnalyzer.Editor
             // Poll selection from tree — avoids dependence on event callbacks.
             var sel = m_TreeView.GetSelection();
             var newSelected = sel.Count > 0 ? m_TreeView.GetEntry(sel[0]) : null;
-            if (newSelected != m_Selected) { m_Selected = newSelected; m_DetailScroll = Vector2.zero; }
+            if (newSelected != m_Selected) { m_Selected = newSelected; m_DetailScroll = Vector2.zero; RefreshSelectedImports(); }
 
             EditorGUI.DrawRect(resizerRect, new Color(0f, 0f, 0f, 0.2f));
             EditorGUIUtility.AddCursorRect(resizerRect, MouseCursor.ResizeVertical);
@@ -353,45 +523,86 @@ namespace BuildLogAnalyzer.Editor
                 return;
             }
 
-            var imports = m_ImportTab?.GetImportsForRefreshGuid(m_Selected.Guid)
-                          ?? new List<(string name, string path, float totalTime)>();
+            var   inner    = new Rect(rect.x + 4, rect.y + 4, rect.width - 8, rect.height - 8);
+            float lh       = EditorGUIUtility.singleLineHeight + 2f;
+            var   warnings = m_Selected.Warnings;
+            int   wc       = warnings?.Count ?? 0;
 
-            var   inner = new Rect(rect.x + 4, rect.y + 4, rect.width - 8, rect.height - 8);
-            float lh    = EditorGUIUtility.singleLineHeight + 2f;
+            // The imported-assets table is a virtualized TreeView (cheap regardless of row
+            // count), so it gets a fixed reserved height rather than a per-row height sum.
+            float assetsHeight = m_SelectedImports.Count == 0 ? lh : Mathf.Clamp(m_SelectedImports.Count * 18f + 22f, 60f, 260f);
 
-            // Section heights: header + asset rows + gap + detail lines.
-            int   assetRows   = Mathf.Max(1, imports.Count);
-            float contentH    = lh + assetRows * lh + lh + m_Selected.DetailLines.Count * lh;
+            // Section heights: warnings + header + assets area + gap + detail lines.
+            var   wrapStyle    = EditorStyles.wordWrappedMiniLabel;
+            float wrapWidth    = Mathf.Max(inner.width - 32f, 100f);
+            float warningsH    = lh; // "N Warning(s)" / "No warnings" label
+            if (wc > 0)
+            {
+                foreach (var w in warnings)
+                    warningsH += wrapStyle.CalcHeight(new GUIContent($"• {w.Message}"), wrapWidth) + 2f;
+                warningsH += (m_Selected.DuplicateAssetSetGroup?.Count ?? 0) * lh;
+            }
+            warningsH += 4f;
+
+            float contentH    = warningsH + lh + assetsHeight + 4f + m_Selected.DetailLines.Count * lh;
             var   contentRect = new Rect(0, 0, inner.width - 16f, Mathf.Max(contentH, inner.height));
 
             m_DetailScroll = GUI.BeginScrollView(inner, m_DetailScroll, contentRect);
             float y = 0f;
 
-            // ── Assets section ────────────────────────────────────────────────
-            GUI.Label(new Rect(0, y, contentRect.width, EditorGUIUtility.singleLineHeight),
-                imports.Count == 0 ? "Imported assets: none" : $"Imported assets ({imports.Count}):",
-                EditorStyles.boldLabel);
-            y += lh;
-
-            if (imports.Count == 0)
+            // ── Warnings section ──────────────────────────────────────────────
+            if (wc == 0)
             {
                 GUI.Label(new Rect(0, y, contentRect.width, EditorGUIUtility.singleLineHeight),
-                    "  No asset imports associated with this refresh.", EditorStyles.miniLabel);
+                    "No warnings detected.", EditorStyles.miniLabel);
                 y += lh;
             }
             else
             {
-                foreach (var (name, path, totalTime) in imports)
+                var warnIcon = EditorGUIUtility.IconContent("console.warnicon.inactive.sml");
+                GUI.Label(new Rect(0, y, contentRect.width, EditorGUIUtility.singleLineHeight),
+                    new GUIContent($" {wc} Warning{(wc > 1 ? "s" : "")}", warnIcon.image),
+                    EditorStyles.boldLabel);
+                y += lh;
+
+                foreach (var w in warnings)
                 {
-                    string label = $"  {name}  ({totalTime:F4}s)";
-                    if (GUI.Button(new Rect(0, y, contentRect.width, EditorGUIUtility.singleLineHeight),
-                            new GUIContent(label, path), EditorStyles.linkLabel))
-                        NavigateToImport(path);
-                    y += lh;
+                    string msg  = $"• {w.Message}";
+                    float  msgH = wrapStyle.CalcHeight(new GUIContent(msg), wrapWidth);
+                    GUI.Label(new Rect(8, y, wrapWidth, msgH), msg, wrapStyle);
+                    y += msgH + 2f;
+                }
+
+                if (m_Selected.DuplicateAssetSetGroup != null)
+                {
+                    foreach (var other in m_Selected.DuplicateAssetSetGroup)
+                    {
+                        string label = $"    → line {other.LineNumber}  (id={other.Guid})";
+                        if (GUI.Button(new Rect(8, y, wrapWidth, EditorGUIUtility.singleLineHeight), label, EditorStyles.linkLabel))
+                            SelectDuplicateRefresh(other);
+                        y += lh;
+                    }
                 }
             }
-
             y += 4f;
+
+            // ── Assets section ────────────────────────────────────────────────
+            GUI.Label(new Rect(0, y, contentRect.width, EditorGUIUtility.singleLineHeight),
+                m_SelectedImports.Count == 0 ? "Imported assets: none" : $"Imported assets ({m_SelectedImports.Count}):",
+                EditorStyles.boldLabel);
+            y += lh;
+
+            if (m_SelectedImports.Count == 0)
+            {
+                GUI.Label(new Rect(0, y, contentRect.width, EditorGUIUtility.singleLineHeight),
+                    "  No asset imports associated with this refresh.", EditorStyles.miniLabel);
+            }
+            else
+            {
+                EnsureImportsTreeView();
+                m_ImportsTreeView.OnGUI(new Rect(0, y, contentRect.width, assetsHeight));
+            }
+            y += assetsHeight + 4f;
 
             // ── Refresh detail lines ──────────────────────────────────────────
             foreach (string line in m_Selected.DetailLines)
@@ -404,10 +615,39 @@ namespace BuildLogAnalyzer.Editor
             GUI.EndScrollView();
         }
 
+        void RefreshSelectedImports()
+        {
+            m_SelectedImports = m_Selected != null
+                ? (m_ImportTab?.GetImportsForRefreshGuid(m_Selected.Guid) ?? new List<(string, string, float)>())
+                : new List<(string, string, float)>();
+            EnsureImportsTreeView();
+            m_ImportsTreeView.SetSource(m_SelectedImports);
+        }
+
+        void EnsureImportsTreeView()
+        {
+            if (m_ImportsTreeView != null) return;
+            if (m_ImportsTreeState == null) m_ImportsTreeState = new TreeViewState<int>();
+            m_ImportsTreeView = new ImportedAssetsTreeView(m_ImportsTreeState, new MultiColumnHeader(ImportedAssetsTreeView.CreateDefaultHeaderState()), NavigateToImport);
+        }
+
         void NavigateToImport(string path)
         {
             m_ImportTab?.SelectImportByPath(path);
             m_NavigateToImportTab?.Invoke();
+        }
+
+        // Jumps to another refresh entry within this same tab (used by duplicate-asset-set warning links).
+        void SelectDuplicateRefresh(RefreshEntry target)
+        {
+            if (!m_FilteredEntries.Contains(target)) { m_Filter = string.Empty; ApplyFilter(); }
+
+            EnsureTreeView();
+            m_TreeView.SelectByGuid(target.Guid);
+            m_Selected     = target;
+            m_DetailScroll = Vector2.zero;
+            RefreshSelectedImports();
+            m_Window?.Repaint();
         }
 
         void HandleSplitterDrag(Rect resizerRect)
