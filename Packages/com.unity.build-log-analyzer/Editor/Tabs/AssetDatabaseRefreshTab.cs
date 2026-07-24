@@ -681,23 +681,10 @@ namespace BuildLogAnalyzer.Editor
             m_TreeView.SetSource(m_FilteredEntries);
 
             float totalTime = 0f;
-            foreach (var e in m_Entries) totalTime += e.TotalTimeSec;
-            string timeExtra = $"  |  Total Refresh Time: {FormatDuration(totalTime)}";
+            foreach (var e in m_FilteredEntries) totalTime += e.TotalTimeSec;
+            string extra = $"  |  Total Refresh Time: {FormatDuration(totalTime)}";
 
-            int shown = m_FilteredEntries.Count, total = m_Entries.Count;
-            m_StatusMsg = shown == total
-                ? $"Showing {total} refreshes{timeExtra}"
-                : $"Showing {shown} of {total} refreshes{timeExtra}";
-        }
-
-        static string FormatDuration(float seconds)
-        {
-            int totalSec = Mathf.FloorToInt(seconds);
-            if (totalSec < 60) return $"{seconds:F3}s";
-            int h = totalSec / 3600;
-            int m = (totalSec % 3600) / 60;
-            int s = totalSec % 60;
-            return h > 0 ? $"{h}h {m}m {s}s" : $"{m}m {s}s";
+            m_StatusMsg = BuildStatusMessage(m_FilteredEntries.Count, m_Entries.Count, "refreshes", extra);
         }
 
         void EnsureTreeView()

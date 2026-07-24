@@ -261,15 +261,5 @@ namespace BuildLogAnalyzer.Editor
 
             return hours * 3600f + minutes * 60f + secs;
         }
-
-        static string FormatDuration(float seconds)
-        {
-            int totalSec = Mathf.FloorToInt(seconds);
-            if (totalSec < 60) return $"{seconds:F3}s";
-            int h = totalSec / 3600;
-            int m = (totalSec % 3600) / 60;
-            int s = totalSec % 60;
-            return h > 0 ? $"{h}h {m}m {s}s" : $"{m}m {s}s";
-        }
     }
 }

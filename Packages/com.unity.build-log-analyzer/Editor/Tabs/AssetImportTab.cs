@@ -181,7 +181,6 @@ namespace BuildLogAnalyzer.Editor
         readonly List<AssetImportEntry> m_Entries         = new List<AssetImportEntry>();
         readonly List<AssetImportEntry> m_FilteredEntries = new List<AssetImportEntry>();
         string              m_StatusMsg       = string.Empty;
-        string              m_ParseExtra      = string.Empty;
         string              m_Filter          = string.Empty;
         ImportTreeView      m_TreeView;
         TreeViewState<int>  m_TreeState;
@@ -371,9 +370,6 @@ namespace BuildLogAnalyzer.Editor
             }
 
             m_Entries.AddRange(dict.Values);
-            float totalTime = 0f;
-            foreach (var e in m_Entries) totalTime += e.TotalTimeSec;
-            m_ParseExtra = $"  |  Total Import Time: {FormatDuration(totalTime)}";
             ApplyFilter();
         }
 
@@ -498,10 +494,11 @@ namespace BuildLogAnalyzer.Editor
             EnsureTreeView();
             m_TreeView.SetSource(m_FilteredEntries);
 
-            int shown = m_FilteredEntries.Count, total = m_Entries.Count;
-            m_StatusMsg = shown == total
-                ? $"Showing {total} assets{m_ParseExtra}"
-                : $"Showing {shown} of {total} assets{m_ParseExtra}";
+            float totalTime = 0f;
+            foreach (var e in m_FilteredEntries) totalTime += e.TotalTimeSec;
+            string extra = $"  |  Total Import Time: {FormatDuration(totalTime)}";
+
+            m_StatusMsg = BuildStatusMessage(m_FilteredEntries.Count, m_Entries.Count, "assets", extra);
         }
 
         void EnsureTreeView()
@@ -511,14 +508,5 @@ namespace BuildLogAnalyzer.Editor
             m_TreeView = new ImportTreeView(m_TreeState, new MultiColumnHeader(ImportTreeView.CreateDefaultHeaderState()));
         }
 
-        static string FormatDuration(float seconds)
-        {
-            int totalSec = Mathf.FloorToInt(seconds);
-            if (totalSec < 60) return $"{seconds:F3}s";
-            int h = totalSec / 3600;
-            int m = (totalSec % 3600) / 60;
-            int s = totalSec % 60;
-            return h > 0 ? $"{h}h {m}m {s}s" : $"{m}m {s}s";
-        }
     }
 }

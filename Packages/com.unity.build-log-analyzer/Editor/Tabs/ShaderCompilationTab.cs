@@ -271,7 +271,6 @@ namespace BuildLogAnalyzer.Editor
         readonly List<LogShaderEntry> m_Entries         = new List<LogShaderEntry>();
         readonly List<LogShaderEntry> m_FilteredEntries = new List<LogShaderEntry>();
         string             m_StatusMsg  = string.Empty;
-        string             m_ParseExtra = string.Empty;
         string             m_Filter     = string.Empty;
         LogTreeView        m_TreeView;
         TreeViewState<int> m_TreeState;
@@ -311,6 +310,10 @@ namespace BuildLogAnalyzer.Editor
             RegexOptions.Compiled);
 
         static readonly Regex s_NonDigitRx = new Regex(@"[^\d]", RegexOptions.Compiled);
+
+        // Modern log format has no "Shader=" summary line — the pass/stage is announced
+        // directly as e.g. `Pass "BoxDownsample" (vp)` right before the per-pass stats block.
+        static readonly Regex s_PassStageRx = new Regex(@"Pass\s+""(.*?)""\s+\((\w+)\)", RegexOptions.Compiled);
 
         // ── BuildLogAnalyzerTab ───────────────────────────────────────────────
 
@@ -399,6 +402,23 @@ namespace BuildLogAnalyzer.Editor
                     int nameEnd   = raw.IndexOf('"', nameStart);
                     if (nameEnd >= nameStart)
                         currentPassName = raw.Substring(nameStart, nameEnd - nameStart);
+
+                    // Modern format: `Pass "Name" (stage)` starts a new pass/stage entry directly —
+                    // there is no separate "Shader=" summary line to key off of.
+                    var pm = s_PassStageRx.Match(raw, idx);
+                    if (pm.Success)
+                    {
+                        current = new LogShaderEntry
+                        {
+                            ShaderName  = currentShaderName,
+                            PassName    = currentPassName,
+                            PassTag     = currentPassName,
+                            ShaderType  = StageAbbrevToShaderType(pm.Groups[2].Value),
+                            GraphicsAPI = string.Empty,
+                        };
+                        currentStartLine = lineIdx + 1;
+                        currentCommitted = false;
+                    }
                     continue;
                 }
 
@@ -429,20 +449,33 @@ namespace BuildLogAnalyzer.Editor
                             passName   = m.Groups[2].Value;
                         }
 
-                        current = new LogShaderEntry
+                        // Older format: this summary line carries fields the modern "Pass" line
+                        // doesn't have (SubShader index, pipeline, totals). If a "Pass" line already
+                        // opened this entry, enrich it in place instead of starting a duplicate.
+                        if (current != null && !currentCommitted)
                         {
-                            ShaderName       = shaderName,
-                            PassName         = passName,
-                            PassTag          = currentPassName,
-                            SubShaderIndex   = int.Parse(m.Groups[3].Value),
-                            ShaderType       = m.Groups[4].Value,
-                            Pipeline         = m.Groups[5].Value,
-                            CompiledVariants = int.Parse(m.Groups[6].Value),
-                            TotalVariants    = int.Parse(m.Groups[7].Value),
-                            GraphicsAPI      = string.Empty,
-                        };
-                        currentStartLine = lineIdx + 1;
-                        currentCommitted = false;
+                            current.SubShaderIndex   = int.Parse(m.Groups[3].Value);
+                            current.Pipeline         = m.Groups[5].Value;
+                            current.CompiledVariants = int.Parse(m.Groups[6].Value);
+                            current.TotalVariants    = int.Parse(m.Groups[7].Value);
+                        }
+                        else
+                        {
+                            current = new LogShaderEntry
+                            {
+                                ShaderName       = shaderName,
+                                PassName         = passName,
+                                PassTag          = currentPassName,
+                                SubShaderIndex   = int.Parse(m.Groups[3].Value),
+                                ShaderType       = m.Groups[4].Value,
+                                Pipeline         = m.Groups[5].Value,
+                                CompiledVariants = int.Parse(m.Groups[6].Value),
+                                TotalVariants    = int.Parse(m.Groups[7].Value),
+                                GraphicsAPI      = string.Empty,
+                            };
+                            currentStartLine = lineIdx + 1;
+                            currentCommitted = false;
+                        }
                     }
                     continue;
                 }
@@ -532,10 +565,6 @@ namespace BuildLogAnalyzer.Editor
             }
 
             ComputeWarnings();
-
-            float totalStrip = 0f, totalCompile = 0f;
-            foreach (var e in m_Entries) { totalStrip += e.ProcessTimeSec; totalCompile += e.FinishedTimeSec; }
-            m_ParseExtra = $"  |  Total Strip: {FormatDuration(totalStrip)}  |  Total Compile: {FormatDuration(totalCompile)}";
             ApplyFilter();
         }
 
@@ -691,10 +720,11 @@ namespace BuildLogAnalyzer.Editor
             EnsureTreeView();
             m_TreeView.SetSource(m_FilteredEntries);
 
-            int shown = m_FilteredEntries.Count, total = m_Entries.Count;
-            m_StatusMsg = shown == total
-                ? $"Showing {total} entries{m_ParseExtra}"
-                : $"Showing {shown} of {total} entries{m_ParseExtra}";
+            float totalStrip = 0f, totalCompile = 0f;
+            foreach (var e in m_FilteredEntries) { totalStrip += e.ProcessTimeSec; totalCompile += e.FinishedTimeSec; }
+            string extra = $"  |  Total Strip: {FormatDuration(totalStrip)}  |  Total Compile: {FormatDuration(totalCompile)}";
+
+            m_StatusMsg = BuildStatusMessage(m_FilteredEntries.Count, m_Entries.Count, "entries", extra);
         }
 
         void EnsureTreeView()
@@ -713,16 +743,6 @@ namespace BuildLogAnalyzer.Editor
             "dp" => "Domain",
             _    => abbrev,
         };
-
-        static string FormatDuration(float seconds)
-        {
-            int totalSec = Mathf.FloorToInt(seconds);
-            if (totalSec < 60) return $"{seconds:F3}s";
-            int h = totalSec / 3600;
-            int m = (totalSec % 3600) / 60;
-            int s = totalSec % 60;
-            return h > 0 ? $"{h}h {m}m {s}s" : $"{m}m {s}s";
-        }
 
         static long ParseVariantCount(string str)
         {
