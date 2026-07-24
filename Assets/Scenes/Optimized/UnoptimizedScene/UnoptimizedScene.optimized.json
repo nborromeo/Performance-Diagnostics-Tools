@@ -1,0 +1,12 @@
+{
+    "SourceScenePath": "Assets/Scenes/UnoptimizedScene.unity",
+    "SourceSceneHash": "9Ssj7XIviLXL7Zw/cNpnONOG9UU=",
+    "OptimizedScenePath": "Assets/Scenes/Optimized/UnoptimizedScene/UnoptimizedScene.unity",
+    "CopiedAssets": [
+        {
+            "SourcePath": "Assets/New Terrain.asset",
+            "OptimizedPath": "Assets/Scenes/Optimized/UnoptimizedScene/OptimizedTerrainData/New Terrain.asset",
+            "SourceHash": "FnVLHMIad92ZAjlvUZScoo4LjKA="
+        }
+    ]
+}

@@ -1,0 +1,41 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: adb6d350f2005db5944ca7df7cc5bcdd, type: 3}
+  m_Name: SceneBuildOptimizerSettings
+  m_EditorClassIdentifier: SceneBuildOptimizer::SceneBuildOptimizer.SceneOptimizerSettingsContainer
+  m_DefaultSettings:
+  - OptimizerId: SceneBuildOptimizer.TerrainLayerOptimizer
+    Enabled: 0
+    Settings:
+      rid: 1169850138092634174
+  m_ProfileOverrides:
+  - Profile: {fileID: 11400000, guid: 83d8cefaa5587cd44b1cf6979d32f9bd, type: 2}
+    Overrides:
+    - OptimizerId: SceneBuildOptimizer.TerrainLayerOptimizer
+      Enabled: 1
+      Settings:
+        rid: 1169850138092634191
+  - Profile: {fileID: 11400000, guid: d7fd9c9efcd78a54c90bd4422acf16ce, type: 2}
+    Overrides: []
+  m_TrackedScenes:
+  - {fileID: 102900000, guid: f21c07b19e94fb849bcf5878c9f758d8, type: 3}
+  references:
+    version: 2
+    RefIds:
+    - rid: 1169850138092634174
+      type: {class: TerrainLayerOptimizerSettings, ns: SceneBuildOptimizer.TerrainLayers, asm: SceneBuildOptimizer}
+      data:
+        WeightEpsilon: 0.001
+    - rid: 1169850138092634191
+      type: {class: TerrainLayerOptimizerSettings, ns: SceneBuildOptimizer.TerrainLayers, asm: SceneBuildOptimizer}
+      data:
+        WeightEpsilon: 0

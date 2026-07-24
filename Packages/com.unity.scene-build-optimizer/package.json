@@ -1,0 +1,8 @@
+{
+  "name": "com.unity.scene-build-optimizer",
+  "version": "0.1.0",
+  "displayName": "Scene Build Optimizer",
+  "description": "Editor tool that generates optimized copies of scenes ahead of a build, without touching the authored scenes or assets. Ships with a terrain layer optimizer that strips unused TerrainLayers from terrains.",
+  "unity": "6000.0",
+  "type": "tool"
+}

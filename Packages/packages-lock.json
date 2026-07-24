@@ -140,6 +140,12 @@
         "com.unity.render-pipelines.core": "17.5.0"
       }
     },
+    "com.unity.scene-build-optimizer": {
+      "version": "file:com.unity.scene-build-optimizer",
+      "depth": 0,
+      "source": "embedded",
+      "dependencies": {}
+    },
     "com.unity.searcher": {
       "version": "4.9.4",
       "depth": 2,
