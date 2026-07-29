@@ -19,6 +19,15 @@ namespace SceneBuildOptimizer
         string Name { get; }
 
         /// <summary>
+        /// Relative execution order within a single <see cref="OptimizedSceneGenerator"/> run —
+        /// lower values run first, ties broken by registration order. Optimizers that mutate the
+        /// same underlying assets as another optimizer must pick an <see cref="Order"/> that
+        /// reflects the correct data dependency (e.g. a terrain merge must run before a layer
+        /// repack of the merged result).
+        /// </summary>
+        int Order { get; }
+
+        /// <summary>
         /// Whether this optimizer has a settings popup to show in the window.
         /// (Whether it actually *runs* is a per-project/per-BuildProfile choice stored in
         /// <see cref="SceneOptimizerSettingsContainer"/>, not a property of the optimizer itself —

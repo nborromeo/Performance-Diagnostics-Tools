@@ -22,6 +22,8 @@ namespace SceneBuildOptimizer.TerrainLayers
 
         public string Id => OptimizerId;
         public string Name => "Terrain Layer Optimizer";
+        public int Order => 100; // runs before TerrainTileMergerOptimizer: stripping unused layers first shrinks each tile's own layer count, which can let more blocks satisfy the merger's draw-call-pass budget
+
         public bool HasSettings => true;
 
         public object CreateDefaultSettings() => new TerrainLayerOptimizerSettings();

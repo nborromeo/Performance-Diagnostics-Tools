@@ -54,7 +54,7 @@ A companion to Unity's built-in Import Activity window that groups reimported as
 
 ## Scene Build Optimizer
 
-Generates optimized copies of scenes ahead of a build — without touching the authored scenes or assets — via a pluggable set of optimizers. Ships with a Terrain Layer Optimizer that strips unused `TerrainLayer`s (detected with a Burst job over raw alphamap texture memory) and repacks the terrain's alphamaps.
+Generates optimized copies of scenes ahead of a build — without touching the authored scenes or assets — via a pluggable, explicitly-ordered set of optimizers. Ships with a Terrain Layer Optimizer that strips unused `TerrainLayer`s (detected with a Burst job over raw alphamap texture memory) and repacks the terrain's alphamaps, and a Terrain Tile Merger that combines NxN grids of adjacent Terrain tiles into fewer, larger ones with no seam in the merged heightmap or splatmap.
 
 **Open:** `Window > Analysis > Scene Build Optimizer`
 

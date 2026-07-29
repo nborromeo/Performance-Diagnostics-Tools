@@ -1,12 +1,92 @@
 {
     "SourceScenePath": "Assets/Scenes/UnoptimizedScene.unity",
-    "SourceSceneHash": "9Ssj7XIviLXL7Zw/cNpnONOG9UU=",
+    "SourceSceneHash": "dJ7eBM6cLRoz8l0CzPFFpzMBsVI=",
     "OptimizedScenePath": "Assets/Scenes/Optimized/UnoptimizedScene/UnoptimizedScene.unity",
     "CopiedAssets": [
         {
             "SourcePath": "Assets/New Terrain.asset",
             "OptimizedPath": "Assets/Scenes/Optimized/UnoptimizedScene/OptimizedTerrainData/New Terrain.asset",
-            "SourceHash": "FnVLHMIad92ZAjlvUZScoo4LjKA="
+            "SourceHash": "73MIe0UrstgkgluJk/0oum6rbhY="
+        },
+        {
+            "SourcePath": "Assets/TerrainData_ac2c519b-6643-441b-b7e6-b432ed3a7a70.asset",
+            "OptimizedPath": "Assets/Scenes/Optimized/UnoptimizedScene/MergedTerrainData/TerrainData_ac2c519b-6643-441b-b7e6-b432ed3a7a70_Merged2x2 2.asset",
+            "SourceHash": "bn/rPZRQRMFY/+8rqx0AHlqtYxY="
+        },
+        {
+            "SourcePath": "Assets/TerrainData_be369dc2-a6e4-4058-82aa-8754438a2eef.asset",
+            "OptimizedPath": "Assets/Scenes/Optimized/UnoptimizedScene/MergedTerrainData/TerrainData_ac2c519b-6643-441b-b7e6-b432ed3a7a70_Merged2x2 2.asset",
+            "SourceHash": "Y5Ns/sprAOuzAG0yfTyWR8B1u7Q="
+        },
+        {
+            "SourcePath": "Assets/TerrainData_824dd8be-f3c7-4b81-adeb-e4185f9f4647.asset",
+            "OptimizedPath": "Assets/Scenes/Optimized/UnoptimizedScene/MergedTerrainData/TerrainData_ac2c519b-6643-441b-b7e6-b432ed3a7a70_Merged2x2 2.asset",
+            "SourceHash": "fm/ICUaLBiNR2unlu3JiD1P/mto="
+        },
+        {
+            "SourcePath": "Assets/TerrainData_4df175db-8fd0-4541-931c-73bb4eaa200f.asset",
+            "OptimizedPath": "Assets/Scenes/Optimized/UnoptimizedScene/MergedTerrainData/TerrainData_ac2c519b-6643-441b-b7e6-b432ed3a7a70_Merged2x2 2.asset",
+            "SourceHash": "PzoPVlTXvA4+S8zmadMjkE4xoIQ="
+        },
+        {
+            "SourcePath": "Assets/TerrainData_9d24ffd4-ab3d-4662-8008-76998bd166e4.asset",
+            "OptimizedPath": "Assets/Scenes/Optimized/UnoptimizedScene/MergedTerrainData/TerrainData_9d24ffd4-ab3d-4662-8008-76998bd166e4_Merged2x2 2.asset",
+            "SourceHash": "w2vtGJTs5J+/+nTv3W/1uvWEp3w="
+        },
+        {
+            "SourcePath": "Assets/TerrainData_e25cb5ba-4a23-4f40-811d-1cbe3a459c2b.asset",
+            "OptimizedPath": "Assets/Scenes/Optimized/UnoptimizedScene/MergedTerrainData/TerrainData_9d24ffd4-ab3d-4662-8008-76998bd166e4_Merged2x2 2.asset",
+            "SourceHash": "86wpqMsEF7Mjzy8S9LoLyEeGwRQ="
+        },
+        {
+            "SourcePath": "Assets/TerrainData_0806059a-4ec3-44e6-b3f8-2be5df36f7c6.asset",
+            "OptimizedPath": "Assets/Scenes/Optimized/UnoptimizedScene/MergedTerrainData/TerrainData_9d24ffd4-ab3d-4662-8008-76998bd166e4_Merged2x2 2.asset",
+            "SourceHash": "WXh2fwLaNlngPtSbrvsjOW1AJ6A="
+        },
+        {
+            "SourcePath": "Assets/TerrainData_0d454e3c-0efd-4d1e-b58a-c3cd774a31fd.asset",
+            "OptimizedPath": "Assets/Scenes/Optimized/UnoptimizedScene/MergedTerrainData/TerrainData_9d24ffd4-ab3d-4662-8008-76998bd166e4_Merged2x2 2.asset",
+            "SourceHash": "rorUtQPkbMVZ08ZrekGz17ADk8k="
+        },
+        {
+            "SourcePath": "Assets/TerrainData_0b2d31e4-fd99-4b68-9fca-fe22feaa3be9.asset",
+            "OptimizedPath": "Assets/Scenes/Optimized/UnoptimizedScene/MergedTerrainData/TerrainData_0b2d31e4-fd99-4b68-9fca-fe22feaa3be9_Merged2x2 2.asset",
+            "SourceHash": "wBfCroW6q7GGOTAS+5sbWIj3070="
+        },
+        {
+            "SourcePath": "Assets/TerrainData_98f4300b-71bc-4b5d-ac7d-3d30b3c90bc4.asset",
+            "OptimizedPath": "Assets/Scenes/Optimized/UnoptimizedScene/MergedTerrainData/TerrainData_0b2d31e4-fd99-4b68-9fca-fe22feaa3be9_Merged2x2 2.asset",
+            "SourceHash": "71XURigLX0nHEP3/yV3gEp5ajEU="
+        },
+        {
+            "SourcePath": "Assets/TerrainData_80f89302-68da-4ce4-be98-3d4174a48252.asset",
+            "OptimizedPath": "Assets/Scenes/Optimized/UnoptimizedScene/MergedTerrainData/TerrainData_0b2d31e4-fd99-4b68-9fca-fe22feaa3be9_Merged2x2 2.asset",
+            "SourceHash": "Xy64Cg2NfmDYhzdwgJ6o4B+4fz8="
+        },
+        {
+            "SourcePath": "Assets/TerrainData_980c0535-60a5-49da-9412-c57773038c6d.asset",
+            "OptimizedPath": "Assets/Scenes/Optimized/UnoptimizedScene/MergedTerrainData/TerrainData_0b2d31e4-fd99-4b68-9fca-fe22feaa3be9_Merged2x2 2.asset",
+            "SourceHash": "kkaUqXq2DcUoBRSzJVCVWyyKjfY="
+        },
+        {
+            "SourcePath": "Assets/TerrainData_cda8cce5-1472-476d-b7d5-1feab6bb23a3.asset",
+            "OptimizedPath": "Assets/Scenes/Optimized/UnoptimizedScene/MergedTerrainData/TerrainData_cda8cce5-1472-476d-b7d5-1feab6bb23a3_Merged2x2 2.asset",
+            "SourceHash": "g1lppH2NPnz/18Syzrm9cZGxwKQ="
+        },
+        {
+            "SourcePath": "Assets/TerrainData_a1c57d2f-7a43-437b-a5bf-9e7a7e0e9bec.asset",
+            "OptimizedPath": "Assets/Scenes/Optimized/UnoptimizedScene/MergedTerrainData/TerrainData_cda8cce5-1472-476d-b7d5-1feab6bb23a3_Merged2x2 2.asset",
+            "SourceHash": "0m+faCWTGMp4i7ZJHS8j52YcNx0="
+        },
+        {
+            "SourcePath": "Assets/TerrainData_00370ee4-9416-4254-8501-311d092f20ab.asset",
+            "OptimizedPath": "Assets/Scenes/Optimized/UnoptimizedScene/MergedTerrainData/TerrainData_cda8cce5-1472-476d-b7d5-1feab6bb23a3_Merged2x2 2.asset",
+            "SourceHash": "aNJedkP9vmkvgrc7i1xC6QW16sU="
+        },
+        {
+            "SourcePath": "Assets/Scenes/Optimized/UnoptimizedScene/OptimizedTerrainData/New Terrain.asset",
+            "OptimizedPath": "Assets/Scenes/Optimized/UnoptimizedScene/MergedTerrainData/TerrainData_cda8cce5-1472-476d-b7d5-1feab6bb23a3_Merged2x2 2.asset",
+            "SourceHash": "apO5T9AtRrZhwkQvSkeHI7dldiE="
         }
     ]
 }

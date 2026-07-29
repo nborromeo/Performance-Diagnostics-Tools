@@ -14,9 +14,13 @@ MonoBehaviour:
   m_EditorClassIdentifier: SceneBuildOptimizer::SceneBuildOptimizer.SceneOptimizerSettingsContainer
   m_DefaultSettings:
   - OptimizerId: SceneBuildOptimizer.TerrainLayerOptimizer
-    Enabled: 0
+    Enabled: 1
     Settings:
       rid: 1169850138092634174
+  - OptimizerId: SceneBuildOptimizer.TerrainTileMergerOptimizer
+    Enabled: 1
+    Settings:
+      rid: 1169850233580159045
   m_ProfileOverrides:
   - Profile: {fileID: 11400000, guid: 83d8cefaa5587cd44b1cf6979d32f9bd, type: 2}
     Overrides:
@@ -24,6 +28,10 @@ MonoBehaviour:
       Enabled: 1
       Settings:
         rid: 1169850138092634191
+    - OptimizerId: SceneBuildOptimizer.TerrainTileMergerOptimizer
+      Enabled: 1
+      Settings:
+        rid: 1169850233580159046
   - Profile: {fileID: 11400000, guid: d7fd9c9efcd78a54c90bd4422acf16ce, type: 2}
     Overrides: []
   m_TrackedScenes:
@@ -39,3 +47,13 @@ MonoBehaviour:
       type: {class: TerrainLayerOptimizerSettings, ns: SceneBuildOptimizer.TerrainLayers, asm: SceneBuildOptimizer}
       data:
         WeightEpsilon: 0
+    - rid: 1169850233580159045
+      type: {class: TerrainTileMergerOptimizerSettings, ns: SceneBuildOptimizer.TerrainTileMerger, asm: SceneBuildOptimizer}
+      data:
+        BlockWidth: 2
+        BlockHeight: 2
+    - rid: 1169850233580159046
+      type: {class: TerrainTileMergerOptimizerSettings, ns: SceneBuildOptimizer.TerrainTileMerger, asm: SceneBuildOptimizer}
+      data:
+        BlockWidth: 2
+        BlockHeight: 2

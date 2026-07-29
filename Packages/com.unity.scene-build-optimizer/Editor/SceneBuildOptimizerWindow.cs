@@ -20,8 +20,28 @@ namespace SceneBuildOptimizer.Editor
         BuildProfile m_GenerationProfile;
         bool m_GenerationProfileInitialized;
 
+        // IsStale() hashes the source scene and every copied asset in its manifest from disk —
+        // cheap once, but OnGUI can fire dozens of times a second (any mouse move triggers a
+        // repaint), and Terrain Tile Merger's manifests can list many sizable TerrainData files
+        // (one per source tile consumed, not per merged output). Recomputing that on every paint
+        // made the whole window noticeably sluggish even at idle, so this is cached and only
+        // recomputed on triggers that could actually change the answer (see RefreshStaleCache).
+        readonly System.Collections.Generic.Dictionary<string, bool> m_StaleCache = new System.Collections.Generic.Dictionary<string, bool>();
+
         [MenuItem("Window/Analysis/Scene Build Optimizer")]
         static void Open() => GetWindow<SceneBuildOptimizerWindow>("Scene Build Optimizer");
+
+        void OnFocus() => m_StaleCache.Clear();
+
+        bool IsStaleCached(string sourcePath, string optimizedPath)
+        {
+            if (!m_StaleCache.TryGetValue(sourcePath, out bool stale))
+            {
+                stale = OptimizedSceneGenerator.IsStale(sourcePath, optimizedPath);
+                m_StaleCache[sourcePath] = stale;
+            }
+            return stale;
+        }
 
         void OnGUI()
         {
@@ -88,7 +108,7 @@ namespace SceneBuildOptimizer.Editor
                 string sourcePath = AssetDatabase.GetAssetPath(sceneAsset);
                 string optimizedPath = OptimizedSceneGenerator.GetDefaultOptimizedScenePath(sourcePath);
                 bool exists = File.Exists(optimizedPath);
-                bool stale = !exists || OptimizedSceneGenerator.IsStale(sourcePath, optimizedPath);
+                bool stale = !exists || IsStaleCached(sourcePath, optimizedPath);
 
                 EditorGUILayout.BeginHorizontal(EditorStyles.helpBox);
                 EditorGUILayout.LabelField(sceneAsset.name, GUILayout.Width(180));
@@ -100,7 +120,10 @@ namespace SceneBuildOptimizer.Editor
                 GUI.color = prevColor;
 
                 if (GUILayout.Button(exists ? "Refresh" : "Optimize", GUILayout.Width(80)))
+                {
                     m_LastReport = OptimizedSceneGenerator.Generate(sourcePath, optimizedPath, m_GenerationProfile);
+                    m_StaleCache.Remove(sourcePath);
+                }
 
                 if (exists && GUILayout.Button("Ping", GUILayout.Width(50)))
                 {
