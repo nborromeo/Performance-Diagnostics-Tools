@@ -1,5 +1,7 @@
 # Scene Build Optimizer
 
+<img width="649" height="686" alt="image" src="https://github.com/user-attachments/assets/1dc8a0f1-0cc0-49f2-85b9-be0fc838debe" />
+
 Generates optimized copies of scenes ahead of a build, without ever modifying the authored scenes or assets they reference. Add scenes to the window's tracked list, click Optimize, and use the generated scene (instead of the authoring one) in your Build Settings or Build Profile.
 
 **Open:** `Window > Analysis > Scene Build Optimizer`
