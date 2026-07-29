@@ -50,6 +50,7 @@ namespace SceneBuildOptimizer.TerrainTileMerger
                 return;
             }
 
+            EditorUtility.DisplayProgressBar("Terrain Tile Merger", "Finding Terrain components in the duplicated scene...", 0f);
             var allTerrains = new List<Terrain>();
             foreach (var root in duplicatedScene.GetRootGameObjects())
                 allTerrains.AddRange(root.GetComponentsInChildren<Terrain>(true));
@@ -57,24 +58,43 @@ namespace SceneBuildOptimizer.TerrainTileMerger
             Debug.Log($"Scene Build Optimizer: Terrain Tile Merger found {allTerrains.Count} Terrain component(s) in the duplicated scene.");
 
             string outputDir = $"{sceneAssetDir}/MergedTerrainData";
+
+            EditorUtility.DisplayProgressBar("Terrain Tile Merger", $"Discovering terrain grids from {allTerrains.Count} tile(s)...", 0f);
             var grids = TerrainGridDiscovery.DiscoverGrids(allTerrains);
 
-            int mergedBlockCount = 0;
+            // Chunk every grid up front so the progress bar below can report an accurate "block X of
+            // Y" — otherwise there'd be no way to know the total ahead of time.
+            var pendingGrids = new List<(TerrainGrid grid, List<TerrainBlock> blocks, List<TerrainGridCell> leftovers)>();
+            int totalBlocks = 0;
             foreach (var grid in grids)
             {
                 if (grid.Cells.Count < 2)
                     continue; // single, unlinked terrain — nothing to merge
 
                 var blocks = TerrainBlockChunker.ChunkGrid(grid, settings.BlockWidth, settings.BlockHeight, out var leftovers);
+                pendingGrids.Add((grid, blocks, leftovers));
+                totalBlocks += blocks.Count;
+            }
+
+            int mergedBlockCount = 0;
+            int blocksProcessed = 0;
+            foreach (var (_, blocks, leftovers) in pendingGrids)
+            {
                 var mergeResults = new List<TerrainBlockMergeResult>();
                 var unmergedCells = new List<TerrainGridCell>(leftovers);
 
                 foreach (var block in blocks)
                 {
+                    string blockLabel = block.Cells[0, 0].Terrain.name;
+                    EditorUtility.DisplayProgressBar("Terrain Tile Merger",
+                        $"Merging block {blocksProcessed + 1} of {totalBlocks} (starting at '{blockLabel}')...",
+                        totalBlocks == 0 ? 0f : (float)blocksProcessed / totalBlocks);
+                    blocksProcessed++;
+
                     if (!TerrainBlockValidator.Validate(block, out string reason))
                     {
-                        Debug.Log($"Scene Build Optimizer: Terrain Tile Merger skipping block starting at '{block.Cells[0, 0].Terrain.name}' — {reason}");
-                        report.LogWarning("Terrain Tile Merger", $"Block starting at '{block.Cells[0, 0].Terrain.name}' skipped: {reason}");
+                        Debug.Log($"Scene Build Optimizer: Terrain Tile Merger skipping block starting at '{blockLabel}' — {reason}");
+                        report.LogWarning("Terrain Tile Merger", $"Block starting at '{blockLabel}' skipped: {reason}");
                         unmergedCells.AddRange(block.Cells.Cast<TerrainGridCell>());
                         continue;
                     }
@@ -90,7 +110,10 @@ namespace SceneBuildOptimizer.TerrainTileMerger
                 }
 
                 if (mergeResults.Count > 0)
+                {
+                    EditorUtility.DisplayProgressBar("Terrain Tile Merger", "Re-linking terrain neighbors...", 1f);
                     TerrainNeighborRebuilder.RebuildNeighbors(duplicatedScene, mergeResults, unmergedCells);
+                }
             }
 
             Debug.Log($"Scene Build Optimizer: Terrain Tile Merger merged {mergedBlockCount} block(s) across {grids.Count} discovered grid(s).");

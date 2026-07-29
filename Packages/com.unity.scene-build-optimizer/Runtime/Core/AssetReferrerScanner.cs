@@ -19,6 +19,18 @@ namespace SceneBuildOptimizer
     /// </summary>
     public static class AssetReferrerScanner
     {
+        // AssetDatabase.GetDependencies(path, true) walks a scene's whole dependency graph — cheap
+        // once, but this scanner runs once per asset checked (once per terrain for the Layer
+        // Optimizer, once per tile per block for the Tile Merger), against every candidate scene. A
+        // scene's own dependency graph can't change mid-run, so recomputing it fresh for every asset
+        // checked was pure waste; cached per candidate scene path instead. Callers doing a fresh
+        // Generate() run should call InvalidateCache() first — cached entries would otherwise still
+        // reflect whatever the project's dependency graph looked like on a previous run.
+        static readonly Dictionary<string, string[]> s_DependencyCache = new Dictionary<string, string[]>();
+
+        /// <summary>Clears the per-candidate-scene dependency cache. Call at the start of a fresh Generate() run.</summary>
+        public static void InvalidateCache() => s_DependencyCache.Clear();
+
         public static bool HasReferrerOutsideScene(string assetPath, params string[] excludeScenePaths) =>
             FindReferrersOutsideScene(assetPath, excludeScenePaths).Count > 0;
 
@@ -53,7 +65,11 @@ namespace SceneBuildOptimizer
                 if (excluded)
                     continue;
 
-                var dependencies = AssetDatabase.GetDependencies(candidatePath, true);
+                if (!s_DependencyCache.TryGetValue(candidatePath, out var dependencies))
+                {
+                    dependencies = AssetDatabase.GetDependencies(candidatePath, true);
+                    s_DependencyCache[candidatePath] = dependencies;
+                }
                 if (Array.IndexOf(dependencies, assetPath) >= 0)
                     referrers.Add(candidatePath);
             }

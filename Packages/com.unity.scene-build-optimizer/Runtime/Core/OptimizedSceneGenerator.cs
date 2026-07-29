@@ -37,6 +37,7 @@ namespace SceneBuildOptimizer
         /// </param>
         public static SceneOptimizationReport Generate(string sourceScenePath, string optimizedScenePath = null, BuildProfile targetProfile = null)
         {
+            AssetReferrerScanner.InvalidateCache();
             var report = new SceneOptimizationReport();
 
             if (!File.Exists(sourceScenePath))
@@ -67,49 +68,69 @@ namespace SceneBuildOptimizer
                 return report;
             }
 
-            var duplicatedScene = EditorSceneManager.OpenScene(optimizedScenePath, OpenSceneMode.Single);
-
-            var manifest = new OptimizedSceneManifest
+            try
             {
-                SourceScenePath = sourceScenePath,
-                SourceSceneHash = OptimizedSceneManifest.ComputeFileHash(sourceScenePath),
-            };
+                EditorUtility.DisplayProgressBar("Scene Build Optimizer", $"Opening duplicated scene '{Path.GetFileName(optimizedScenePath)}'...", 0f);
+                var duplicatedScene = EditorSceneManager.OpenScene(optimizedScenePath, OpenSceneMode.Single);
 
-            var settingsContainer = SceneOptimizerSettingsProvider.GetOrCreateSettings();
-            Debug.Log(targetProfile != null
-                ? $"Scene Build Optimizer: generating '{optimizedScenePath}' against profile '{targetProfile.name}'."
-                : $"Scene Build Optimizer: generating '{optimizedScenePath}' against project-wide defaults (no profile).");
-
-            foreach (var optimizer in SceneOptimizerRegistry.Optimizers)
-            {
-                // A profile override (if targetProfile has one for this optimizer) decides both
-                // whether it runs and its settings; otherwise the project-wide default applies.
-                var entry = settingsContainer.ResolveEntry(optimizer.Id, optimizer.CreateDefaultSettings, targetProfile);
-                Debug.Log($"Scene Build Optimizer: optimizer '{optimizer.Name}' enabled={entry.Enabled} for this generation.");
-                if (!entry.Enabled) continue;
-                optimizer.Execute(duplicatedScene, sourceScenePath, sceneAssetDir, entry.Settings, report);
-            }
-
-            EditorSceneManager.SaveScene(duplicatedScene);
-
-            foreach (var copied in report.CopiedAssets)
-            {
-                manifest.CopiedAssets.Add(new OptimizedSceneManifest.CopiedAsset
+                var manifest = new OptimizedSceneManifest
                 {
-                    SourcePath = copied.SourcePath,
-                    OptimizedPath = copied.OptimizedPath,
-                    SourceHash = OptimizedSceneManifest.ComputeFileHash(copied.SourcePath),
-                });
+                    SourceScenePath = sourceScenePath,
+                    SourceSceneHash = OptimizedSceneManifest.ComputeFileHash(sourceScenePath),
+                };
+
+                var settingsContainer = SceneOptimizerSettingsProvider.GetOrCreateSettings();
+                Debug.Log(targetProfile != null
+                    ? $"Scene Build Optimizer: generating '{optimizedScenePath}' against profile '{targetProfile.name}'."
+                    : $"Scene Build Optimizer: generating '{optimizedScenePath}' against project-wide defaults (no profile).");
+
+                var optimizers = SceneOptimizerRegistry.Optimizers;
+                // Reserve the last two progress slots for saving the scene and writing the manifest,
+                // so the bar doesn't sit at 100% while those (still potentially slow) steps run.
+                int totalSteps = optimizers.Count + 2;
+                int step = 0;
+
+                foreach (var optimizer in optimizers)
+                {
+                    // A profile override (if targetProfile has one for this optimizer) decides both
+                    // whether it runs and its settings; otherwise the project-wide default applies.
+                    var entry = settingsContainer.ResolveEntry(optimizer.Id, optimizer.CreateDefaultSettings, targetProfile);
+                    Debug.Log($"Scene Build Optimizer: optimizer '{optimizer.Name}' enabled={entry.Enabled} for this generation.");
+                    EditorUtility.DisplayProgressBar("Scene Build Optimizer", $"Running '{optimizer.Name}'...", (float)step / totalSteps);
+                    step++;
+                    if (!entry.Enabled) continue;
+                    optimizer.Execute(duplicatedScene, sourceScenePath, sceneAssetDir, entry.Settings, report);
+                }
+
+                EditorUtility.DisplayProgressBar("Scene Build Optimizer", "Saving optimized scene...", (float)step / totalSteps);
+                step++;
+                EditorSceneManager.SaveScene(duplicatedScene);
+
+                EditorUtility.DisplayProgressBar("Scene Build Optimizer", $"Hashing {report.CopiedAssets.Count} asset(s) for the manifest...", (float)step / totalSteps);
+                foreach (var copied in report.CopiedAssets)
+                {
+                    manifest.CopiedAssets.Add(new OptimizedSceneManifest.CopiedAsset
+                    {
+                        SourcePath = copied.SourcePath,
+                        OptimizedPath = copied.OptimizedPath,
+                        SourceHash = OptimizedSceneManifest.ComputeFileHash(copied.SourcePath),
+                    });
+                }
+                manifest.Save(optimizedScenePath);
+
+                EditorUtility.DisplayProgressBar("Scene Build Optimizer", "Refreshing asset database...", 1f);
+                AssetDatabase.SaveAssets();
+                AssetDatabase.Refresh();
+
+                if (!string.IsNullOrEmpty(previouslyActiveScenePath) && File.Exists(previouslyActiveScenePath))
+                    EditorSceneManager.OpenScene(previouslyActiveScenePath, OpenSceneMode.Single);
+
+                return report;
             }
-            manifest.Save(optimizedScenePath);
-
-            AssetDatabase.SaveAssets();
-            AssetDatabase.Refresh();
-
-            if (!string.IsNullOrEmpty(previouslyActiveScenePath) && File.Exists(previouslyActiveScenePath))
-                EditorSceneManager.OpenScene(previouslyActiveScenePath, OpenSceneMode.Single);
-
-            return report;
+            finally
+            {
+                EditorUtility.ClearProgressBar();
+            }
         }
 
         /// <summary>True if no optimized scene/manifest exists yet, or the source scene/copied assets changed since the last generation.</summary>

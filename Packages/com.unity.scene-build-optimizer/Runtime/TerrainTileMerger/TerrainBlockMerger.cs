@@ -59,10 +59,14 @@ namespace SceneBuildOptimizer.TerrainTileMerger
             AssetFolderUtility.EnsureFolderPath(outputDir);
             string mergedPath = AssetDatabase.GenerateUniqueAssetPath($"{outputDir}/{templateData.name}_Merged{block.Width}x{block.Height}.asset");
 
+            // CreateAsset already writes and imports synchronously — mergedData is already the
+            // live, database-backed instance afterward. An explicit ImportAsset + LoadAssetAtPath
+            // reload here would just be two redundant asset-database round-trips per block (this
+            // differs from TerrainLayerOptimizer's ForceFreshCopy path, which reimports because it's
+            // refreshing an existing file's embedded textures — there's no such file here, mergedData
+            // was never anything but this in-memory object).
             var mergedData = new TerrainData { name = System.IO.Path.GetFileNameWithoutExtension(mergedPath) };
             AssetDatabase.CreateAsset(mergedData, mergedPath);
-            AssetDatabase.ImportAsset(mergedPath);
-            mergedData = AssetDatabase.LoadAssetAtPath<TerrainData>(mergedPath);
 
             PopulateMergedTerrainData(mergedData, templateData, block);
 
