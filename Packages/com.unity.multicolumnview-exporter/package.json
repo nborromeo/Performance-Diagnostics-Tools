@@ -1,0 +1,9 @@
+{
+  "name": "com.unity.multicolumnview-exporter",
+  "version": "0.1.0",
+  "displayName": "MultiColumnView Exporter",
+  "description": "Discovers MultiColumnListView/MultiColumnTreeView controls open anywhere in the Editor, exports selected ones to a queryable SQLite database, and lets you run ad-hoc SQL against the result.",
+  "unity": "6000.0",
+  "type": "tool",
+  "dependencies": {}
+}

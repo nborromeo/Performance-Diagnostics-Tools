@@ -1,0 +1,10 @@
+{
+  "name": "com.unity.native-profiler",
+  "displayName": "Native CPU Profiler (xctrace)",
+  "version": "0.1.0",
+  "unity": "6000.2",
+  "description": "Records native CPU samples with Apple's xctrace (Instruments Time Profiler), symbolicates Mono JIT frames from inside the Editor and shows a mixed native + managed call tree in an Editor window.",
+  "author": {
+    "name": "Nicolas Borromeo"
+  }
+}
