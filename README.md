@@ -54,7 +54,7 @@ A companion to Unity's built-in Import Activity window that groups reimported as
 
 ## Native CPU Profiler (xctrace)
 
-<!-- TODO: screenshot -->
+<img width="960" height="454" alt="image" src="https://github.com/user-attachments/assets/399d34dd-ea80-4122-9e13-59030ce4aea0" />
 
 Records native CPU samples of the Editor or any other process with Apple's `xctrace` (Instruments' Time Profiler) and shows them as a mixed native + managed call tree, with Mono JIT frames resolved to C# method names from inside the Editor. Includes a timeline for range selection, top-down / bottom-up views, a managed-only filter, and folded-stack export for flame graphs. macOS only.
 
