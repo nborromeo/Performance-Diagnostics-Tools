@@ -9,7 +9,7 @@ using UnityEditor;
 using UnityEngine;
 using Debug = UnityEngine.Debug;
 
-namespace HU.NativeProfiler
+namespace NativeProfiler
 {
     internal enum CapturePhase
     {
@@ -30,11 +30,11 @@ namespace HU.NativeProfiler
     internal static class CaptureSession
     {
         const string k_TimeProfileXPath = "/trace-toc/run[@number=\"1\"]/data/table[@schema=\"time-profile\"]";
-        const string k_PhaseKey = "HU.NativeProfiler.Phase";
-        const string k_DirKey = "HU.NativeProfiler.Dir";
-        const string k_ShellPidKey = "HU.NativeProfiler.ShellPid";
-        const string k_RecordStartKey = "HU.NativeProfiler.RecordStart";
-        const string k_ErrorKey = "HU.NativeProfiler.Error";
+        const string k_PhaseKey = "NativeProfiler.Phase";
+        const string k_DirKey = "NativeProfiler.Dir";
+        const string k_ShellPidKey = "NativeProfiler.ShellPid";
+        const string k_RecordStartKey = "NativeProfiler.RecordStart";
+        const string k_ErrorKey = "NativeProfiler.Error";
 
         /// <summary>When the current scripting domain came to life. JIT addresses sampled before this point are dead.</summary>
         public static readonly DateTime DomainLoadedUtc;

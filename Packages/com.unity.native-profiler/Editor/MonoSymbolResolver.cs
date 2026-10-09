@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using UnityEngine;
 
-namespace HU.NativeProfiler
+namespace NativeProfiler
 {
     /// <summary>
     /// Maps raw instruction pointers to managed method names by asking the Mono runtime that is

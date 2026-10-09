@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using UnityEngine;
 
-namespace HU.NativeProfiler
+namespace NativeProfiler
 {
     /// <summary>
     /// Turns the unsymbolicated (JIT) frames of a capture into managed method names, either live

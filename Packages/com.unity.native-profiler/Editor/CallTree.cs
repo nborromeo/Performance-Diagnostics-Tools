@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 
-namespace HU.NativeProfiler
+namespace NativeProfiler
 {
     internal sealed class CallNode
     {

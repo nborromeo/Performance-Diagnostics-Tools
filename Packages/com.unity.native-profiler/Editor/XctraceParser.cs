@@ -4,7 +4,7 @@ using System.Globalization;
 using System.Xml;
 using System.Xml.Linq;
 
-namespace HU.NativeProfiler
+namespace NativeProfiler
 {
     /// <summary>
     /// Parses the output of

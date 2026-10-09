@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace HU.NativeProfiler
+namespace NativeProfiler
 {
     internal enum FunctionKind
     {

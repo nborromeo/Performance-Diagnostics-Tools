@@ -1,6 +1,6 @@
 {
-    "name": "HU.NativeProfiler.Editor",
-    "rootNamespace": "HU.NativeProfiler",
+    "name": "NativeProfiler.Editor",
+    "rootNamespace": "NativeProfiler",
     "references": [],
     "includePlatforms": [
         "Editor"

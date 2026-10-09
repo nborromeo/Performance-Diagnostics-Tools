@@ -4,7 +4,7 @@ using UnityEditor;
 using UnityEditor.IMGUI.Controls;
 using UnityEngine;
 
-namespace HU.NativeProfiler
+namespace NativeProfiler
 {
     /// <summary>
     /// Multi-column view over a <see cref="CallTree"/>. Rows are generated lazily (only expanded

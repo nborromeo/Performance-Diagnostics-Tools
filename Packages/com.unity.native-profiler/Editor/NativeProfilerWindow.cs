@@ -7,7 +7,7 @@ using UnityEditor;
 using UnityEditor.IMGUI.Controls;
 using UnityEngine;
 
-namespace HU.NativeProfiler
+namespace NativeProfiler
 {
     internal sealed class NativeProfilerWindow : EditorWindow
     {
