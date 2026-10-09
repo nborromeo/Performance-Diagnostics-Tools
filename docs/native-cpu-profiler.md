@@ -1,6 +1,6 @@
 # Native CPU Profiler (xctrace)
 
-<!-- TODO: screenshot -->
+<img width="960" height="454" alt="image" src="https://github.com/user-attachments/assets/7e076878-c54e-4772-a79a-b77c36582b6e" />
 
 Records native CPU samples with Apple's `xctrace` (the command-line side of Instruments' Time Profiler) and shows them as a mixed native + managed call tree inside the Editor. Unlike Unity's Profiler, it doesn't depend on profiler markers: every sampled stack is shown down to the engine and system functions where the time is actually spent, with the Mono JIT frames of the Editor resolved back to their C# method names.
 
