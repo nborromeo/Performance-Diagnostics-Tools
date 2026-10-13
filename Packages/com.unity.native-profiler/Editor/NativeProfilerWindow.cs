@@ -160,6 +160,8 @@ namespace NativeProfiler
                         EditorUtility.OpenWithDefaultApp(data.TracePath);
                     if (GUILayout.Button("Export Folded…", EditorStyles.toolbarButton))
                         ExportFolded(data);
+                    if (GUILayout.Button(new GUIContent("Export for AI…", "Markdown report of the current view (thread + time range), pre-aggregated for LLM analysis."), EditorStyles.toolbarButton))
+                        ExportAiReport(data);
                 }
             }
         }
@@ -406,6 +408,18 @@ namespace NativeProfiler
             }
             Walk(tree.Root);
             File.WriteAllText(path, sb.ToString());
+            EditorUtility.RevealInFinder(path);
+        }
+
+        void ExportAiReport(ProfileData data)
+        {
+            var path = EditorUtility.SaveFilePanel("Export report for AI analysis", data.CaptureDirectory, "cpu-profile-report.md", "md");
+            if (string.IsNullOrEmpty(path))
+                return;
+            var threadLabel = m_ThreadSelection >= 0 && m_ThreadSelection < data.Threads.Count
+                ? data.Threads[m_ThreadSelection].Name
+                : "All threads (one root per thread)";
+            File.WriteAllText(path, AiReportExporter.Build(data, CurrentOptions(), threadLabel));
             EditorUtility.RevealInFinder(path);
         }
 

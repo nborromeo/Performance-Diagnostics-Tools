@@ -68,6 +68,13 @@ The footer also shows the target process, sample count and total time of the cur
 
 - **Open in Instruments** — opens the raw `.trace` in Instruments for anything the tool doesn't cover.
 - **Export Folded…** — writes the current view (thread + time range, top-down) as Brendan Gregg's folded-stack format, with managed names included. Load it in [speedscope](https://www.speedscope.app) or `flamegraph.pl` to get a flame graph.
+- **Export for AI…** — writes the current view (thread + time range + *Managed only*) as a self-describing Markdown report meant to be pasted into or attached to an LLM (Claude, ChatGPT, etc.) for analysis. It's pre-aggregated and pruned so it fits in a model's context window, and contains:
+  - capture metadata, the active filters and a legend explaining every column;
+  - CPU time per thread;
+  - CPU over time in 50 buckets, with spikes (mean + 2σ) flagged;
+  - top 50 functions by self time and top 30 managed methods by inclusive time;
+  - the top-down call tree (branches under 1% pruned, pass-through chains collapsed with ` > `);
+  - the caller paths (bottom-up) of the 15 heaviest hotspots.
 
 ### Requirements
 

@@ -88,6 +88,68 @@ namespace PerformanceDiagnostics.Detectors
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         delegate void IcacheInvalidate(IntPtr start, UIntPtr len);
+
+        // Mono embedding API, resolved from the already-loaded libmonobdwgc. Used to confirm the
+        // patch target is the start of a real JIT-compiled method body that is large enough for
+        // the jump. GetFunctionPointer can return a trampoline or a tiny method; writing 16 bytes
+        // there overwrites neighbouring trampolines/methods (possibly another domain's, e.g.
+        // Burst's) and crashes the editor later at an unrelated location.
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate IntPtr MonoDomainGet();
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate IntPtr MonoJitInfoTableFind(IntPtr domain, IntPtr addr);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate IntPtr MonoJitInfoGetCodeStart(IntPtr ji);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int    MonoJitInfoGetCodeSize(IntPtr ji);
+
+        static MonoDomainGet           s_MonoDomainGet;
+        static MonoJitInfoTableFind    s_MonoJitInfoTableFind;
+        static MonoJitInfoGetCodeStart s_MonoJitInfoGetCodeStart;
+        static MonoJitInfoGetCodeSize  s_MonoJitInfoGetCodeSize;
+        static bool s_MonoApiInitialized;
+
+        static T GetExport<T>(string symbol) where T : class
+        {
+            IntPtr fn = dlsym(k_RtldDefault, symbol);
+            return fn == IntPtr.Zero ? null : Marshal.GetDelegateForFunctionPointer(fn, typeof(T)) as T;
+        }
+
+        static bool EnsureMonoApi()
+        {
+            if (!s_MonoApiInitialized)
+            {
+                s_MonoApiInitialized    = true;
+                s_MonoDomainGet          = GetExport<MonoDomainGet>("mono_domain_get");
+                s_MonoJitInfoTableFind   = GetExport<MonoJitInfoTableFind>("mono_jit_info_table_find");
+                s_MonoJitInfoGetCodeStart = GetExport<MonoJitInfoGetCodeStart>("mono_jit_info_get_code_start");
+                s_MonoJitInfoGetCodeSize  = GetExport<MonoJitInfoGetCodeSize>("mono_jit_info_get_code_size");
+            }
+            return s_MonoDomainGet != null && s_MonoJitInfoTableFind != null
+                && s_MonoJitInfoGetCodeStart != null && s_MonoJitInfoGetCodeSize != null;
+        }
+
+        static bool IsSafePatchTarget(IntPtr ptr, int patchBytes, string name)
+        {
+            if (!EnsureMonoApi())
+            {
+                Debug.LogWarning($"[PerformanceDiagnostics] Mono JIT info API unavailable — '{name}' not patched.");
+                return false;
+            }
+
+            IntPtr ji = s_MonoJitInfoTableFind(s_MonoDomainGet(), ptr);
+            if (ji == IntPtr.Zero)
+            {
+                Debug.LogWarning($"[PerformanceDiagnostics] '{name}' does not point at JIT-compiled code — patch skipped.");
+                return false;
+            }
+
+            IntPtr start = s_MonoJitInfoGetCodeStart(ji);
+            int    size  = s_MonoJitInfoGetCodeSize(ji);
+            if (start != ptr || size < patchBytes)
+            {
+                Debug.LogWarning($"[PerformanceDiagnostics] '{name}' is not a patchable method body " +
+                                 $"(start 0x{(long)start:x} vs 0x{(long)ptr:x}, size {size}) — patch skipped.");
+                return false;
+            }
+            return true;
+        }
 #endif
 
         const int k_PatchBytesX64   = 14; // jmp [rip+0] ; <abs64>
@@ -119,6 +181,11 @@ namespace PerformanceDiagnostics.Detectors
                 IntPtr origPtr = original.MethodHandle.GetFunctionPointer();
                 IntPtr replPtr = replacement.MethodHandle.GetFunctionPointer();
                 if (origPtr == IntPtr.Zero || replPtr == IntPtr.Zero) return false;
+
+#if UNITY_EDITOR_OSX
+                int patchBytes = arch == Architecture.Arm64 ? k_PatchBytesArm64 : k_PatchBytesX64;
+                if (!IsSafePatchTarget(origPtr, patchBytes, original.Name)) return false;
+#endif
 
                 return arch == Architecture.Arm64
                     ? PatchArm64(origPtr, replPtr, original.Name)

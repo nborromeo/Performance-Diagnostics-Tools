@@ -65,7 +65,7 @@ namespace NativeProfiler
         {
             var tree = new CallTree { Root = new CallNode { Id = 0, FunctionId = -1 } };
             var staleId = Symbolicator.StaleFunctionId(data);
-            var nativeOnlyId = data.InternFunction("[native only — no managed frames]", null, FunctionKind.Synthetic);
+            var nativeOnlyId = NativeOnlyFunctionId(data);
             var threadRoots = new Dictionary<int, int>();
             var stack = new List<int>(256);
 
@@ -74,15 +74,7 @@ namespace NativeProfiler
                 if (!PassesFilter(s, options))
                     continue;
 
-                // Root -> leaf list of function ids.
-                stack.Clear();
-                for (var i = s.Frames.Length - 1; i >= 0; i--)
-                {
-                    var f = data.Frames[s.Frames[i]];
-                    stack.Add(s.Stale && f.IsJitCandidate ? staleId : f.FunctionId);
-                }
-                if (options.ManagedOnly)
-                    KeepManaged(data, stack, nativeOnlyId);
+                FillStack(data, s, options.ManagedOnly, stack, staleId, nativeOnlyId);
                 if (options.Inverted)
                     stack.Reverse();
                 if (options.Thread < 0)
@@ -110,6 +102,22 @@ namespace NativeProfiler
             tree.Root.SortRecursive();
             return tree;
         }
+
+        /// <summary>Fills <paramref name="stack"/> with the sample's function ids, root -> leaf.</summary>
+        public static void FillStack(ProfileData data, in Sample s, bool managedOnly, List<int> stack, int staleId, int nativeOnlyId)
+        {
+            stack.Clear();
+            for (var i = s.Frames.Length - 1; i >= 0; i--)
+            {
+                var f = data.Frames[s.Frames[i]];
+                stack.Add(s.Stale && f.IsJitCandidate ? staleId : f.FunctionId);
+            }
+            if (managedOnly)
+                KeepManaged(data, stack, nativeOnlyId);
+        }
+
+        public static int NativeOnlyFunctionId(ProfileData data) =>
+            data.InternFunction("[native only — no managed frames]", null, FunctionKind.Synthetic);
 
         /// <summary>
         /// Keeps only managed frames plus the first native frame called from managed code
