@@ -79,6 +79,36 @@ namespace PerformanceDiagnostics.Detectors
         static MethodInfo s_TmpGetCharImpl;          // TMP_FontAssetUtilities.GetCharacterFromFontAsset_Internal
         static MethodInfo s_TmpAddCharsUIntImpl;     // TMP_FontAsset.TryAddCharacters(uint[], out uint[], bool)
         static MethodInfo s_TmpAddCharsStrImpl;      // TMP_FontAsset.TryAddCharacters(string, out string, bool)
+        static FieldInfo  s_TmpSearchedAssets;       // TMP_FontAssetUtilities.k_SearchedAssets
+
+        // Typed delegate for the hot TMP forwarding path (avoids MethodBase.Invoke + boxing per glyph)
+        delegate TMP_Character TmpGetCharInternalFn(uint unicode, TMP_FontAsset sourceFontAsset,
+            bool includeFallbacks, TMPro.FontStyles fontStyle, TMPro.FontWeight fontWeight,
+            out bool isAlternativeTypeface);
+        static TmpGetCharInternalFn s_TmpGetCharImplFn;
+
+        static T TryCreateDelegate<T>(MethodInfo method) where T : Delegate
+        {
+            if (method == null) return null;
+            try   { return (T)Delegate.CreateDelegate(typeof(T), method, false); }
+            catch { return null; }
+        }
+
+        // Clears the k_SearchedAssets set without per-call reflection lookups.
+        static readonly Dictionary<Type, MethodInfo> s_ClearMethods = new();
+        static void ClearCollection(object collection)
+        {
+            switch (collection)
+            {
+                case null: return;
+                case HashSet<int> hs:  hs.Clear(); return;
+                case HashSet<long> hl: hl.Clear(); return;
+            }
+            var type = collection.GetType();
+            if (!s_ClearMethods.TryGetValue(type, out var clear))
+                s_ClearMethods[type] = clear = type.GetMethod("Clear", Type.EmptyTypes);
+            clear?.Invoke(collection, null);
+        }
 
         // TextCore forwarding target (NOT patched)
         static Type       s_TextCoreUtilsType;
@@ -97,11 +127,23 @@ namespace PerformanceDiagnostics.Detectors
         readonly Dictionary<int, HashSet<uint>> m_PollKnown      = new();
         readonly Dictionary<int, int>           m_PollLastCount  = new();
 
+        // Resources.FindObjectsOfTypeAll walks every loaded object, so the font asset list is
+        // cached and only re-enumerated on a slow cadence or when the project/scene changes.
+        // Glyph counts on the cached list are checked on a faster (but still throttled) cadence.
+        const double k_PollInterval       = 0.25;
+        const double k_AssetScanInterval  = 5.0;
+        readonly List<TMP_FontAsset>      m_TmpFontAssets      = new();
+        readonly List<UnityEngine.Object> m_TextCoreFontAssets = new();
+        double m_NextPollTime;
+        double m_NextAssetScanTime;
+
         // ── Constructor ───────────────────────────────────────────────────────
         DynamicFontDetector()
         {
             InitReflectionAndPatch();
             EditorApplication.update += OnEditorUpdate;
+            EditorApplication.projectChanged      += InvalidateFontAssetCache;
+            EditorApplication.playModeStateChanged += _ => InvalidateFontAssetCache();
         }
 
         // ── Reflection + patching ─────────────────────────────────────────────
@@ -120,6 +162,9 @@ namespace PerformanceDiagnostics.Detectors
             // 1. GetCharacterFromFontAsset (public)  →  GetCharacterFromFontAsset_Internal (private)
             //    Canvas-tracker pattern: patch the wrapper, forward to impl via reflection.
             s_TmpGetCharImpl = utils.GetMethod("GetCharacterFromFontAsset_Internal",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            s_TmpGetCharImplFn = TryCreateDelegate<TmpGetCharInternalFn>(s_TmpGetCharImpl);
+            s_TmpSearchedAssets = utils.GetField("k_SearchedAssets",
                 BindingFlags.NonPublic | BindingFlags.Static);
 
             var getCharWrapper = utils.GetMethod("GetCharacterFromFontAsset",
@@ -229,19 +274,18 @@ namespace PerformanceDiagnostics.Detectors
             out bool isAlternativeTypeface)
         {
             int glyphsBefore = sourceFontAsset?.glyphTable?.Count ?? 0;
-            string trace = CaptureTrace();
 
             // Replicate k_SearchedAssets.Clear() that the wrapper does before calling _Internal
             if (includeFallbacks && s_TmpGetCharImpl != null)
-            {
-                var searched = typeof(TMP_FontAssetUtilities).GetField("k_SearchedAssets",
-                    BindingFlags.NonPublic | BindingFlags.Static);
-                (searched?.GetValue(null) as System.Collections.ICollection)
-                    ?.GetType().GetMethod("Clear")?.Invoke(searched.GetValue(null), null);
-            }
+                ClearCollection(s_TmpSearchedAssets?.GetValue(null));
 
             TMP_Character result = null;
-            if (s_TmpGetCharImpl != null)
+            if (s_TmpGetCharImplFn != null)
+            {
+                result = s_TmpGetCharImplFn(unicode, sourceFontAsset, includeFallbacks,
+                                            fontStyle, fontWeight, out isAlternativeTypeface);
+            }
+            else if (s_TmpGetCharImpl != null)
             {
                 var args = new object[] { unicode, sourceFontAsset, includeFallbacks,
                                           fontStyle, fontWeight, false };
@@ -253,10 +297,12 @@ namespace PerformanceDiagnostics.Detectors
                 isAlternativeTypeface = false;
             }
 
+            // Stack trace is only captured when the atlas actually grew — the hook still sits
+            // on the stack here, so the trace is identical to capturing it on entry.
             int glyphsAfter = sourceFontAsset?.glyphTable?.Count ?? 0;
             if (glyphsAfter > glyphsBefore && sourceFontAsset != null)
                 s_Instance.RecordEvent(GetId(sourceFontAsset), sourceFontAsset.name,
-                    glyphsAfter, trace, new[] { unicode });
+                    glyphsAfter, CaptureTrace(), new[] { unicode });
 
             return result;
         }
@@ -268,15 +314,10 @@ namespace PerformanceDiagnostics.Detectors
             out bool isAlternativeTypeface, bool populateLigatures)
         {
             int glyphsBefore = GetTextCoreGlyphCount(sourceFontAsset);
-            Debug.Log($"[DynFont] UITK hook fired U+{unicode:X4} glyphsBefore={glyphsBefore} prop={s_TextCoreGlyphTableProp?.Name ?? "NULL"}");
-            string trace = CaptureTrace();
 
             // Replicate k_SearchedAssets.Clear()
             if (includeFallbacks && s_TextCoreGetCharImpl != null && s_TextCoreSearchedAssets != null)
-            {
-                (s_TextCoreSearchedAssets.GetValue(null) as System.Collections.ICollection)
-                    ?.GetType().GetMethod("Clear")?.Invoke(s_TextCoreSearchedAssets.GetValue(null), null);
-            }
+                ClearCollection(s_TextCoreSearchedAssets.GetValue(null));
 
             object result = null;
             if (s_TextCoreGetCharImpl != null)
@@ -294,8 +335,8 @@ namespace PerformanceDiagnostics.Detectors
             int glyphsAfter = GetTextCoreGlyphCount(sourceFontAsset);
             var uo = sourceFontAsset as UnityEngine.Object;
             if (glyphsAfter > glyphsBefore && uo != null)
-                s_Instance.RecordEvent(GetId(uo), uo.name, glyphsAfter, trace, new[] { unicode },
-                                       isUitk: true);
+                s_Instance.RecordEvent(GetId(uo), uo.name, glyphsAfter, CaptureTrace(),
+                                       new[] { unicode }, isUitk: true);
 
             return result;
         }
@@ -344,12 +385,17 @@ namespace PerformanceDiagnostics.Detectors
             new System.Diagnostics.StackTrace(2, true).ToString();
 
         // Call GetInstanceID() via reflection to avoid CS0619 (error-level obsolete in Unity 6+).
-        static readonly MethodInfo s_GetInstanceIdMethod =
-            typeof(UnityEngine.Object).GetMethod("GetInstanceID",
-                BindingFlags.Public | BindingFlags.Instance);
+        // Bound once as an open-instance delegate — MethodBase.Invoke per call was a hot spot.
+        static readonly Func<UnityEngine.Object, int> s_GetInstanceId =
+            TryCreateDelegate<Func<UnityEngine.Object, int>>(
+                typeof(UnityEngine.Object).GetMethod("GetInstanceID",
+                    BindingFlags.Public | BindingFlags.Instance, null, Type.EmptyTypes, null));
 
-        static int GetId(UnityEngine.Object obj) =>
-            obj == null ? 0 : (int)(s_GetInstanceIdMethod?.Invoke(obj, null) ?? 0);
+        static int GetId(UnityEngine.Object obj)
+        {
+            if (obj == null) return 0;
+            return s_GetInstanceId != null ? s_GetInstanceId(obj) : obj.GetHashCode();
+        }
 
         // Initialized in PatchTextCoreFontAsset() using FindType (Type.GetType fails for Unity built-in modules).
         static PropertyInfo s_TextCoreGlyphTableProp;
@@ -360,15 +406,44 @@ namespace PerformanceDiagnostics.Detectors
         // ── Polling (native render path fallback) ─────────────────────────────
         void OnEditorUpdate()
         {
-            if (m_IsPaused) return;
+            if (m_IsPaused || !IsEnabled) return;
+
+            double now = EditorApplication.timeSinceStartup;
+            if (now < m_NextPollTime) return;
+            m_NextPollTime = now + k_PollInterval;
+
+            if (now >= m_NextAssetScanTime)
+            {
+                m_NextAssetScanTime = now + k_AssetScanInterval;
+                RefreshFontAssetCache();
+            }
+
             PollTmpFontAssets();
             PollTextCoreFontAssets();
         }
 
+        void InvalidateFontAssetCache() => m_NextAssetScanTime = 0;
+
+        void RefreshFontAssetCache()
+        {
+            m_TmpFontAssets.Clear();
+            m_TmpFontAssets.AddRange(Resources.FindObjectsOfTypeAll<TMP_FontAsset>());
+
+            m_TextCoreFontAssets.Clear();
+            if (s_TextCoreFontAssetType != null)
+                m_TextCoreFontAssets.AddRange(Resources.FindObjectsOfTypeAll(s_TextCoreFontAssetType));
+        }
+
+        // Polling is throttled, so a hook-recorded entry may be from an earlier frame.
+        // Skip when a hook already reported this glyph count (or higher).
+        bool AlreadyRecordedByHook(int id, int count) =>
+            m_LastEntry.TryGetValue(id, out var existing) && existing.GlyphCount >= count;
+
         void PollTmpFontAssets()
         {
-            foreach (var fa in Resources.FindObjectsOfTypeAll<TMP_FontAsset>())
+            foreach (var fa in m_TmpFontAssets)
             {
+                if (fa == null) continue; // destroyed since last scan
                 int id    = GetId(fa);
                 int count = fa.glyphTable?.Count ?? 0;
 
@@ -381,9 +456,11 @@ namespace PerformanceDiagnostics.Detectors
                 if (count <= last) { m_PollLastCount[id] = count; continue; }
                 m_PollLastCount[id] = count;
 
-                // Skip if the managed hook already captured this event this frame
-                if (m_LastEntry.TryGetValue(id, out var existing) &&
-                    existing.FrameNumber == Time.frameCount) continue;
+                if (AlreadyRecordedByHook(id, count))
+                {
+                    SeedKnown(id, GetTmpUnicodes(fa));
+                    continue;
+                }
 
                 var newUnicodes = DiffUnicodes(id, GetTmpUnicodes(fa));
                 RecordEvent(id, fa.name, count, k_PollTrace,
@@ -394,10 +471,9 @@ namespace PerformanceDiagnostics.Detectors
 
         void PollTextCoreFontAssets()
         {
-            if (s_TextCoreFontAssetType == null) return;
-            foreach (UnityEngine.Object fa in
-                     Resources.FindObjectsOfTypeAll(s_TextCoreFontAssetType))
+            foreach (var fa in m_TextCoreFontAssets)
             {
+                if (fa == null) continue; // destroyed since last scan
                 int id    = GetId(fa);
                 int count = GetTextCoreGlyphCount(fa);
 
@@ -410,8 +486,11 @@ namespace PerformanceDiagnostics.Detectors
                 if (count <= last) { m_PollLastCount[id] = count; continue; }
                 m_PollLastCount[id] = count;
 
-                if (m_LastEntry.TryGetValue(id, out var existing) &&
-                    existing.FrameNumber == Time.frameCount) continue;
+                if (AlreadyRecordedByHook(id, count))
+                {
+                    SeedKnown(id, GetTextCoreUnicodes(fa));
+                    continue;
+                }
 
                 var newUnicodes = DiffUnicodes(id, GetTextCoreUnicodes(fa));
                 RecordEvent(id, fa.name, count, k_PollTrace,
@@ -636,6 +715,7 @@ namespace PerformanceDiagnostics.Detectors
             m_PollKnown.Clear();
             m_PollLastCount.Clear();
             m_NextId = 0;
+            InvalidateFontAssetCache();
             Changed?.Invoke();
         }
 
@@ -669,16 +749,31 @@ namespace PerformanceDiagnostics.Detectors
             if (newMax != m_MaxEntries && newMax > 0) m_MaxEntries = newMax;
             GUILayout.EndHorizontal();
 
-            int tmpCount = Resources.FindObjectsOfTypeAll<TMP_FontAsset>().Length;
-            int tcCount  = s_TextCoreFontAssetType != null
-                ? Resources.FindObjectsOfTypeAll(s_TextCoreFontAssetType).Length : 0;
-            GUILayout.Label($"Polling: {tmpCount} TMP  |  {tcCount} TextCore font assets",
+            GUILayout.Label($"Polling: {m_TmpFontAssets.Count} TMP  |  {m_TextCoreFontAssets.Count} TextCore font assets",
                 EditorStyles.miniLabel);
             GUILayout.Label($"Known glyph baselines: {m_PollLastCount.Count}",
                 EditorStyles.miniLabel);
         }
 
         // ── Details panel ─────────────────────────────────────────────────────
+        static GUIStyle s_TraceStyle;
+
+        static GUIStyle GetTraceStyle()
+        {
+            if (s_TraceStyle != null && s_TraceStyle.font != null) return s_TraceStyle;
+            s_TraceStyle = new GUIStyle(EditorStyles.label)
+            {
+                font     = Font.CreateDynamicFontFromOSFont("Courier New", 11),
+                fontSize = 11,
+                wordWrap = false,
+                richText = false,
+                clipping = TextClipping.Clip,
+                padding  = new RectOffset(4, 4, 2, 2),
+            };
+            s_TraceStyle.normal.textColor = EditorStyles.label.normal.textColor;
+            return s_TraceStyle;
+        }
+
         public void DrawIssueDetails(DiagnosticIssue issue, ref Vector2 scroll,
                                      ref int traceIndex, ref Vector2 traceScroll)
         {
@@ -747,16 +842,7 @@ namespace PerformanceDiagnostics.Detectors
             else
             {
                 CanvasInvalidationDetector.DrawSectionHeader("Stack Trace");
-                var frameStyle = new GUIStyle(EditorStyles.label)
-                {
-                    font     = Font.CreateDynamicFontFromOSFont("Courier New", 11),
-                    fontSize = 11,
-                    wordWrap = false,
-                    richText = false,
-                    clipping = TextClipping.Clip,
-                    padding  = new RectOffset(4, 4, 2, 2),
-                };
-                frameStyle.normal.textColor = EditorStyles.label.normal.textColor;
+                var frameStyle = GetTraceStyle();
 
                 var lines = e.StackTrace.Split('\n');
                 float lineH = frameStyle.lineHeight + 2f;
